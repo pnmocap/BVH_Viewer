@@ -1,0 +1,26 @@
+# PyInstaller artifacts
+# bvh_visualizer_improved.exe
+# _internal/
+build/
+dist/
+*.spec
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+ENV/
+
+# IDE configuration
+.vscode/
+.idea/
+*.swp
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Large files
+*.bvh
