@@ -1,4 +1,4 @@
-pygame==2.5.2
+pygame>=2.5.2,<=2.6.0
 PyOpenGL==3.1.7
-numpy==1.24.3
-pyinstaller==5.13.2
+numpy>=1.26.0
+pyinstaller==5.13

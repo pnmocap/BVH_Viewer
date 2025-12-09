@@ -10,12 +10,518 @@ from tkinter import filedialog, Listbox, Checkbutton, IntVar, messagebox
 import math
 import csv
 import colorsys
+import matplotlib.pyplot as plt
+import json
+from datetime import datetime
+# Removed GLUT imports to avoid NullFunctionError on systems without freeglut.dll
+# We will use Pygame's native 2D rendering for UI and Text overlay.
+
+# ======================== MocapAPI 集成模块 ========================
 try:
-    from OpenGL.GLUT import *
-except ImportError:
-    print("Warning: PyOpenGL-accelerate is not installed. GLUT may not be available.")
-    print("Please install PyOpenGL-accelerate: pip install PyOpenGL_accelerate")
-    from OpenGL.GLUT import *
+    from mocap_connector import MocapConnector, ConnectionState, CapturePhase, CalibrationState
+    from recording_manager import RecordingManager
+    MOCAP_SDK_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: MocapAPI modules not available: {e}")
+    MOCAP_SDK_AVAILABLE = False
+
+
+class AppMode:
+    """应用模式枚举"""
+    OFFLINE = "offline"     # 离线模式 (加载BVH文件)
+    REALTIME = "realtime"   # 实时模式 (连接设备)
+
+
+class AppState:
+    """全局应用状态"""
+    mode = AppMode.OFFLINE
+    mocap_connector = None
+    recording_manager = None
+    
+    # 实时模式相关的关节数据（用于渲染）
+    realtime_joints = {}
+    
+    @classmethod
+    def init_realtime_modules(cls):
+        """初始化实时模式所需的模块"""
+        if not MOCAP_SDK_AVAILABLE:
+            print("Error: MocapAPI SDK not available")
+            return False
+        if cls.mocap_connector is None:
+            cls.mocap_connector = MocapConnector()
+        if cls.recording_manager is None:
+            cls.recording_manager = RecordingManager()
+        return True
+    
+    @classmethod
+    def cleanup(cls):
+        """清理资源"""
+        if cls.mocap_connector and cls.mocap_connector.is_connected:
+            cls.mocap_connector.disconnect()
+# ======================== MocapAPI 集成模块结束 ========================
+
+# ======================== 网球动作分析模块 (矩阵式交互控制版) ========================
+from matplotlib.widgets import CheckButtons
+import matplotlib.cm as cm # 用于生成颜色
+
+class TennisAnalyzer:
+    """网球动作分析器 - 支持多部位、多历史文件的矩阵式交互对比"""
+    HISTORY_FILE = "tennis_analysis_history.json"
+
+    # ... (euler_to_matrix, calculate_angular_velocities 等方法保持不变，为节省篇幅略去) ...
+    # 请确保保留这两个核心计算方法，直接复制之前的即可，或者只替换 show_custom_plot 及其辅助部分
+    # 为了方便您复制，这里完整提供修改后的类结构
+
+    @staticmethod
+    def get_analysis_options():
+        """弹出对话框，获取左右手/脚的配置 (代码保持不变)"""
+        options = {}
+        dialog = tk.Tk()
+        dialog.title("Analysis Settings")
+        dialog.geometry("300x250")
+        screen_width = dialog.winfo_screenwidth()
+        screen_height = dialog.winfo_screenheight()
+        x = (screen_width - 300) // 2
+        y = (screen_height - 250) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        tk.Label(dialog, text="Racket Hand (击球手):", font=("Arial", 10, "bold")).pack(pady=(15, 5))
+        hand_var = tk.StringVar(value="Right")
+        frame_hand = tk.Frame(dialog)
+        frame_hand.pack()
+        tk.Radiobutton(frame_hand, text="Right Hand", variable=hand_var, value="Right").pack(side=tk.LEFT, padx=10)
+        tk.Radiobutton(frame_hand, text="Left Hand", variable=hand_var, value="Left").pack(side=tk.LEFT, padx=10)
+
+        tk.Label(dialog, text="Drive Leg (发力腿):", font=("Arial", 10, "bold")).pack(pady=(15, 5))
+        leg_var = tk.StringVar(value="Right")
+        frame_leg = tk.Frame(dialog)
+        frame_leg.pack()
+        tk.Radiobutton(frame_leg, text="Right Leg", variable=leg_var, value="Right").pack(side=tk.LEFT, padx=10)
+        tk.Radiobutton(frame_leg, text="Left Leg", variable=leg_var, value="Left").pack(side=tk.LEFT, padx=10)
+
+        def on_confirm():
+            options['hand'] = hand_var.get()
+            options['leg'] = leg_var.get()
+            dialog.destroy()
+        def on_cancel():
+            options.clear()
+            dialog.destroy()
+
+        btn_frame = tk.Frame(dialog)
+        btn_frame.pack(pady=20)
+        tk.Button(btn_frame, text="Analyze", command=on_confirm, bg="#ddffdd", width=10).pack(side=tk.LEFT, padx=10)
+        tk.Button(btn_frame, text="Cancel", command=on_cancel, bg="#ffdddd", width=10).pack(side=tk.LEFT, padx=10)
+        dialog.wait_window()
+        return options
+
+    @staticmethod
+    def euler_to_matrix(angles, order):
+        rads = np.radians(angles)
+        def get_rot_mat(axis, theta):
+            c, s = np.cos(theta), np.sin(theta)
+            if axis == 'Xrotation': return np.array([[1, 0, 0], [0, c, -s], [0, s, c]])
+            elif axis == 'Yrotation': return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
+            elif axis == 'Zrotation': return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+            return np.eye(3)
+        R = np.eye(3)
+        for i, axis_name in enumerate(order):
+            R = R @ get_rot_mat(axis_name, rads[i])
+        return R
+
+    @staticmethod
+    def calculate_angular_velocities(joints, motion_data, frame_time, hand_side="Right", leg_side="Right"):
+        target_joints = {
+            '1. Thigh': f'{leg_side}UpLeg',
+            '2. Hips': 'Hips',
+            '3. Chest': 'Spine2',
+            '4. Arm': f'{hand_side}Arm',
+            '5. Forearm': f'{hand_side}ForeArm',
+            '6. Hand': f'{hand_side}Hand'
+        }
+        num_frames = len(motion_data)
+        velocities = {k: [] for k in target_joints.keys()}
+        
+        joint_info = {}
+        for label, name in target_joints.items():
+            final_name = name
+            if name not in joints:
+                continue
+            raw_channels = joints[final_name].channels
+            rot_channels = [c for c in raw_channels if 'rotation' in c]
+            if not rot_channels: continue
+            indices = [joints[final_name].channel_indices[c] for c in rot_channels]
+            joint_info[label] = {'indices': indices, 'order': rot_channels}
+
+        for i in range(2, num_frames):
+            for label, info in joint_info.items():
+                curr_angles = [motion_data[i][idx] for idx in info['indices']]
+                prev_angles = [motion_data[i-1][idx] for idx in info['indices']]
+                R_curr = TennisAnalyzer.euler_to_matrix(curr_angles, info['order'])
+                R_prev = TennisAnalyzer.euler_to_matrix(prev_angles, info['order'])
+                R_diff = R_prev.T @ R_curr
+                trace = np.clip(np.trace(R_diff), -1.0, 3.0)
+                theta_deg = np.degrees(np.arccos((trace - 1) / 2))
+                velocities[label].append(theta_deg / frame_time)
+
+        velocities['meta_config'] = {'hand': hand_side, 'leg': leg_side}
+        return velocities
+
+    @staticmethod
+    def load_history():
+        if os.path.exists(TennisAnalyzer.HISTORY_FILE):
+            try:
+                with open(TennisAnalyzer.HISTORY_FILE, 'r') as f: return json.load(f)
+            except: pass
+        return []
+
+    @staticmethod
+    def save_to_history(velocities, filename="Current_Session"):
+        data_entry = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "filename": filename,
+            "data": velocities
+        }
+        history = TennisAnalyzer.load_history()
+        history.append(data_entry)
+        if len(history) > 50: history = history[-50:] 
+        with open(TennisAnalyzer.HISTORY_FILE, 'w') as f: json.dump(history, f)
+        return history
+
+    @staticmethod
+    def open_history_manager():
+        history = TennisAnalyzer.load_history()
+        win = tk.Tk()
+        win.title("Tennis Analysis Manager")
+        win.geometry("600x500")
+
+        lbl = tk.Label(win, text="Select records to compare.\nLAST selected is the 'Main Subject'.", font=("Arial", 10), pady=10)
+        lbl.pack()
+
+        frame_list = tk.Frame(win)
+        frame_list.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        scrollbar = tk.Scrollbar(frame_list); scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        listbox = Listbox(frame_list, selectmode=tk.MULTIPLE, yscrollcommand=scrollbar.set, font=("Courier New", 10))
+        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=listbox.yview)
+
+        def refresh_list():
+            listbox.delete(0, tk.END)
+            for i, entry in enumerate(reversed(history)):
+                config = entry['data'].get('meta_config', {'hand':'?', 'leg':'?'})
+                display_text = f"[{entry['timestamp']}] {entry['filename']} (H:{config['hand']}/L:{config['leg']})"
+                listbox.insert(tk.END, display_text)
+            if listbox.size() > 0: listbox.selection_set(0)
+
+        refresh_list()
+
+        btn_frame = tk.Frame(win, pady=10)
+        btn_frame.pack(fill=tk.X)
+
+        def delete_selected():
+            nonlocal history
+            selected_indices = listbox.curselection()
+            if not selected_indices: return
+            indices_to_delete = [len(history) - 1 - i for i in selected_indices]
+            indices_to_delete.sort(reverse=True)
+            if not messagebox.askyesno("Confirm", f"Delete {len(indices_to_delete)} records?"): return
+            for idx in indices_to_delete:
+                if 0 <= idx < len(history): del history[idx]
+            with open(TennisAnalyzer.HISTORY_FILE, 'w') as f: json.dump(history, f)
+            refresh_list()
+
+        def plot_selected():
+            selected_ui_indices = listbox.curselection()
+            if not selected_ui_indices: return
+            data_indices = [len(history) - 1 - i for i in selected_ui_indices]
+            data_indices.sort()
+            final_selection = [history[i] for i in data_indices]
+            win.destroy()
+            TennisAnalyzer.show_custom_plot(final_selection)
+
+        tk.Button(btn_frame, text="Delete Selected", bg="#ffdddd", command=delete_selected).pack(side=tk.LEFT, padx=20)
+        tk.Button(btn_frame, text="Generate Plot", bg="#ddffdd", command=plot_selected, font=("Arial", 11, "bold")).pack(side=tk.RIGHT, padx=20)
+        win.mainloop()
+
+    @staticmethod
+    def show_custom_plot(entries):
+        """
+        绘制图表 (矩阵式交互控制版)
+        - 左上：控制显示的部位 (Parts)
+        - 左下：控制显示的文件 (Files)
+        - 核心逻辑：Line Visible = Part_Checked AND File_Checked
+        """
+        if not entries: return
+
+        # 布局：左侧两块用于Checkbox，中间图表，右侧信息
+        fig = plt.figure(figsize=(16, 9))
+        gs = fig.add_gridspec(2, 3, width_ratios=[0.15, 0.65, 0.2], height_ratios=[0.5, 0.5]) 
+        
+        # 1. 控件区域
+        ax_check_parts = fig.add_subplot(gs[0, 0])
+        ax_check_files = fig.add_subplot(gs[1, 0])
+        ax_check_parts.axis('off'); ax_check_parts.set_title("Body Parts", fontsize=10, fontweight='bold')
+        ax_check_files.axis('off'); ax_check_files.set_title("Data Sources", fontsize=10, fontweight='bold')
+        
+        # 2. 图表区域 (跨两行)
+        ax_plot = fig.add_subplot(gs[:, 1])
+        
+        # 3. 文本区域 (跨两行)
+        ax_text = fig.add_subplot(gs[:, 2])
+        ax_text.axis('off')
+
+        # === 数据准备 ===
+        main_entry = entries[-1] # 最新的作为Current
+        ref_entries = entries[:-1] # 其他作为History
+
+        # 部位颜色配置 (仅用于 Current 数据)
+        part_colors = {
+            '1. Thigh': '#8B4513', '2. Hips': '#FF9900', '3. Chest': '#33CC33',
+            '4. Arm': '#3366FF', '5. Forearm': '#00CCCC', '6. Hand': '#CC0000'
+        }
+        part_keys = list(part_colors.keys())
+
+        # 历史文件颜色配置 (用于 History 数据)
+        # 使用 colormap 生成不同的颜色
+        hist_colors = plt.cm.tab10(np.linspace(0, 1, len(ref_entries))) if len(ref_entries) > 0 else []
+
+        # === 核心：绘图并建立索引 ===
+        # 结构: all_lines = [ {'line': obj, 'text': obj, 'part': 'Hand', 'file': 'Current'}, ... ]
+        all_lines_data = []
+        peak_info_main = {} # 用于右侧显示的Current峰值
+
+        # A. 绘制历史数据 (所有部位)
+        for i, entry in enumerate(ref_entries):
+            fname = entry['filename']
+            file_label = f"Hist {i+1}: {fname[:10]}.." # 缩短文件名
+            color = hist_colors[i]
+            
+            data = entry['data']
+            if not data: continue
+            
+            # 取第一列数据做X轴
+            first_key = next(iter(data))
+            frames = range(1, len(data[first_key]) + 1) if first_key in data else []
+
+            for part in part_keys:
+                if part in data and data[part]:
+                    vals = data[part]
+                    # 确保帧数匹配
+                    xs = range(1, len(vals)+1)
+                    plt.sca(ax_plot)
+                    # 历史数据用虚线，统一颜色
+                    l, = plt.plot(xs, vals, linestyle='--', color=color, alpha=0.6, linewidth=1)
+                    
+                    # 记录对象
+                    all_lines_data.append({
+                        'lines': [l], # 可能还会有别的元素
+                        'part': part,
+                        'file': file_label
+                    })
+
+        # B. 绘制当前数据 (Main)
+        current_label = "Current (Main)"
+        curr_data = main_entry['data']
+        if curr_data:
+            first_key = next(iter(curr_data))
+            # 兼容：如果数据里没有meta_config等key
+            valid_keys = [k for k in curr_data.keys() if k in part_colors]
+            if valid_keys:
+                max_len = len(curr_data[valid_keys[0]])
+                frames = range(1, max_len + 1)
+
+                for part in part_keys:
+                    if part in curr_data and curr_data[part]:
+                        vals = curr_data[part]
+                        
+                        max_val = max(vals)
+                        max_frame = vals.index(max_val) + 1
+                        peak_info_main[part] = (max_frame, max_val)
+                        
+                        line_color = part_colors[part]
+                        
+                        plt.sca(ax_plot)
+                        l, = plt.plot(frames, vals, label=part, color=line_color, linewidth=2.5)
+                        p, = plt.plot(max_frame, max_val, 'o', color=line_color, markersize=6)
+                        
+                        # 标签错位
+                        y_offset = 15 if 'Hand' in part or 'Arm' in part else 25
+                        t = plt.annotate(
+                            f'{int(max_val)}\nF{max_frame}', 
+                            xy=(max_frame, max_val), xytext=(0, y_offset), 
+                            textcoords='offset points', ha='center', fontsize=8, fontweight='bold',
+                            bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=line_color, alpha=0.9)
+                        )
+                        
+                        all_lines_data.append({
+                            'lines': [l, p, t],
+                            'part': part,
+                            'file': current_label
+                        })
+
+        # === C. 创建 CheckButtons ===
+        
+        # 1. 部位开关
+        check_parts = CheckButtons(ax_check_parts, part_keys, [True]*len(part_keys))
+        # 设置颜色以便区分
+        for i, lbl in enumerate(check_parts.labels):
+            lbl.set_color(part_colors.get(lbl.get_text(), 'black'))
+            lbl.set_fontsize(8)
+
+        # 2. 文件开关
+        file_labels = [current_label] + [f"Hist {i+1}: {e['filename'][:10]}.." for i, e in enumerate(ref_entries)]
+        check_files = CheckButtons(ax_check_files, file_labels, [True]*len(file_labels))
+        # 设置颜色
+        check_files.labels[0].set_fontweight('bold') # Current 加粗
+        for i, lbl in enumerate(check_files.labels[1:]): # History 设为对应颜色
+            lbl.set_color(hist_colors[i])
+            lbl.set_fontsize(8)
+
+        # === D. 交互回调 ===
+        def update_visibility(label=None):
+            # 获取当前所有 CheckBox 的状态
+            # check.get_status() 返回布尔值列表
+            active_parts = [lbl.get_text() for lbl, state in zip(check_parts.labels, check_parts.get_status()) if state]
+            active_files = [lbl.get_text() for lbl, state in zip(check_files.labels, check_files.get_status()) if state]
+            
+            # 遍历所有绘图对象，设置可见性
+            for item in all_lines_data:
+                is_visible = (item['part'] in active_parts) and (item['file'] in active_files)
+                for gfx_obj in item['lines']:
+                    gfx_obj.set_visible(is_visible)
+            
+            plt.draw()
+
+        check_parts.on_clicked(update_visibility)
+        check_files.on_clicked(update_visibility)
+
+        # === E. 右侧信息面板 (仅显示Current) ===
+        config = curr_data.get('meta_config', {})
+        info_text = f"Main: {main_entry['filename'][:20]}\n"
+        info_text += f"H:{config.get('hand','?')}/L:{config.get('leg','?')}\n"
+        info_text += "-" * 25 + "\n"
+        
+        info_text += "[Peak Values]\n"
+        info_text += f"{'Part':<9} {'Frm':<4} {'Vel'}\n"
+        info_text += "-" * 25 + "\n"
+        
+        sorted_peaks = []
+        for part in part_keys:
+            if part in peak_info_main:
+                frame, val = peak_info_main[part]
+                sorted_peaks.append((part, frame))
+                part_name = part.split('. ')[1]
+                info_text += f"{part_name:<9} {frame:<4} {int(val)}\n"
+        
+        info_text += "\n[Timing Intervals]\n"
+        for i in range(len(sorted_peaks) - 1):
+            curr_part, curr_frame = sorted_peaks[i]
+            next_part, next_frame = sorted_peaks[i+1]
+            diff = next_frame - curr_frame
+            p1 = curr_part.split('. ')[1]
+            p2 = next_part.split('. ')[1]
+            sign = "+" if diff > 0 else ""
+            info_text += f"{p1}->{p2}: {sign}{diff}\n"
+
+        ax_text.text(0, 1.0, info_text, transform=ax_text.transAxes, fontsize=10, 
+                     verticalalignment='top', fontfamily='monospace')
+
+        # 保存引用防止GC
+        fig.check_parts = check_parts
+        fig.check_files = check_files
+
+        ax_plot.set_title(f"Tennis Kinetic Chain Analysis", fontsize=16)
+        ax_plot.set_xlabel("Frame Index", fontsize=12)
+        ax_plot.set_ylabel("Angular Velocity (deg/s)", fontsize=12)
+        ax_plot.grid(True, linestyle='--', alpha=0.5)
+        
+        plt.tight_layout()
+        plt.show()
+# ======================== 模块结束 ========================
+
+# 全局变量：当前加载的BVH文件路径
+current_bvh_file_path = None
+
+# Overlay Manager Class for high-performance 2D rendering
+class OverlayManager:
+    def __init__(self):
+        self.surface = None
+        self.width = 0
+        self.height = 0
+        self.font_cache = {}
+        self.texture_id = None
+
+    def update_display_size(self, width, height):
+        if self.width != width or self.height != height:
+            self.width = width
+            self.height = height
+            self.surface = pygame.Surface((width, height), pygame.SRCALPHA)
+            if self.texture_id is not None:
+                glDeleteTextures([self.texture_id])
+            self.texture_id = glGenTextures(1)
+
+    def clear(self):
+        if self.surface:
+            self.surface.fill((0, 0, 0, 0))
+
+    def draw_text(self, x, y, text, color, size=18):
+        if not self.surface: return
+        if size not in self.font_cache:
+            try:
+                self.font_cache[size] = pygame.font.SysFont("Arial", size)
+            except:
+                self.font_cache[size] = pygame.font.Font(None, size)
+        
+        font = self.font_cache[size]
+        text_surf = font.render(text, True, color)
+        
+        # OpenGL coordinates (x, y) where y=0 is bottom.
+        # Pygame coordinates (x, y) where y=0 is top.
+        # Convert OpenGL y to Pygame y: y_pygame = height - y - text_height
+        
+        self.surface.blit(text_surf, (x, self.height - y - text_surf.get_height()))
+
+    def render(self):
+        if not self.surface: return
+        
+        # Use NEAREST for crisp text on overlay
+        texture_data = pygame.image.tostring(self.surface, "RGBA", 1)
+        
+        glEnable(GL_TEXTURE_2D)
+        glBindTexture(GL_TEXTURE_2D, self.texture_id)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, self.width, self.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, texture_data)
+        
+        glDisable(GL_DEPTH_TEST)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        
+        glMatrixMode(GL_PROJECTION)
+        glPushMatrix()
+        glLoadIdentity()
+        glOrtho(0, self.width, 0, self.height, -1, 1)
+        glMatrixMode(GL_MODELVIEW)
+        glPushMatrix()
+        glLoadIdentity()
+        
+        glColor4f(1, 1, 1, 1)
+        glBegin(GL_QUADS)
+        glTexCoord2f(0, 0); glVertex2f(0, 0)
+        glTexCoord2f(1, 0); glVertex2f(self.width, 0)
+        glTexCoord2f(1, 1); glVertex2f(self.width, self.height)
+        glTexCoord2f(0, 1); glVertex2f(0, self.height)
+        glEnd()
+        
+        glPopMatrix()
+        glMatrixMode(GL_PROJECTION)
+        glPopMatrix()
+        glMatrixMode(GL_MODELVIEW)
+        
+        glDisable(GL_BLEND)
+        glDisable(GL_TEXTURE_2D)
+        glEnable(GL_DEPTH_TEST)
+
+overlay_manager = OverlayManager()
 
 # BVH Joint Class
 class Joint:
@@ -414,8 +920,8 @@ def draw_position_panel(display, current_positions, joints):
     panel_x = 10
     panel_y = display[1] - 60  # Located below the buttons
     line_height = 18
-    title_font = GLUT_BITMAP_HELVETICA_18
-    content_font = GLUT_BITMAP_HELVETICA_12
+    title_font_size = 18
+    content_font_size = 12
     title_color = (0.0, 0.0, 0.0)
     content_color = (0.0, 0.0, 0.0)
 
@@ -441,7 +947,7 @@ def draw_position_panel(display, current_positions, joints):
     title_x = joint_name_col_start + (data_column_width - title_width) // 2
 
     # Draw panel title
-    draw_text_2d(title_x, panel_y, title_text, title_color, title_font)
+    draw_text_2d(title_x, panel_y, title_text, title_color, title_font_size)
     current_y = panel_y - line_height
 
     # Iterate joints by custom order
@@ -449,15 +955,15 @@ def draw_position_panel(display, current_positions, joints):
         if joint_name not in joints or joint_name not in current_positions:
             continue
         # Draw joint name
-        draw_text_2d(joint_name_col_start, current_y, joint_name, content_color, content_font)
+        draw_text_2d(joint_name_col_start, current_y, joint_name, content_color, content_font_size)
         # Convert cm to m, keep 4 decimal places
         pos = current_positions[joint_name] / 100
         x_text = f"X:{pos[0]:.4f}"
         y_text = f"Y:{pos[1]:.4f}"
         z_text = f"Z:{pos[2]:.4f}"
-        draw_text_2d(X_COL_START, current_y, x_text, content_color, content_font)
-        draw_text_2d(Y_COL_START, current_y, y_text, content_color, content_font)
-        draw_text_2d(Z_COL_START, current_y, z_text, content_color, content_font)
+        draw_text_2d(X_COL_START, current_y, x_text, content_color, content_font_size)
+        draw_text_2d(Y_COL_START, current_y, y_text, content_color, content_font_size)
+        draw_text_2d(Z_COL_START, current_y, z_text, content_color, content_font_size)
         current_y -= line_height
         if current_y < 50:  # 50 pixels margin at the bottom
             break
@@ -473,8 +979,8 @@ def draw_velocity_panel(display, current_velocities, joints):
     panel_x = display[0] - 330  # 330 pixels width reserved on the right
     panel_y = display[1] - 60  # Aligned with the top of the Position panel
     line_height = 18
-    title_font = GLUT_BITMAP_HELVETICA_18
-    content_font = GLUT_BITMAP_HELVETICA_12
+    title_font_size = 18
+    content_font_size = 12
     title_color = (0.0, 0.0, 0.0)
     content_color = (0.0, 0.0, 0.0)
 
@@ -500,7 +1006,7 @@ def draw_velocity_panel(display, current_velocities, joints):
     title_x = joint_name_col_start + (data_column_width - title_width) // 2
 
     # Draw panel title
-    draw_text_2d(title_x, panel_y, title_text, title_color, title_font)
+    draw_text_2d(title_x, panel_y, title_text, title_color, title_font_size)
     current_y = panel_y - line_height
 
     # Iterate joints by custom order
@@ -508,15 +1014,15 @@ def draw_velocity_panel(display, current_velocities, joints):
         if joint_name not in joints or joint_name not in current_velocities:
             continue
         # Draw joint name
-        draw_text_2d(joint_name_col_start, current_y, joint_name, content_color, content_font)
+        draw_text_2d(joint_name_col_start, current_y, joint_name, content_color, content_font_size)
         # Convert cm/s to m/s, keep 4 decimal places
         vel = current_velocities[joint_name] / 100
         x_text = f"X:{vel[0]:.4f}"
         y_text = f"Y:{vel[1]:.4f}"
         z_text = f"Z:{vel[2]:.4f}"
-        draw_text_2d(X_COL_START, current_y, x_text, content_color, content_font)
-        draw_text_2d(Y_COL_START, current_y, y_text, content_color, content_font)
-        draw_text_2d(Z_COL_START, current_y, z_text, content_color, content_font)
+        draw_text_2d(X_COL_START, current_y, x_text, content_color, content_font_size)
+        draw_text_2d(Y_COL_START, current_y, y_text, content_color, content_font_size)
+        draw_text_2d(Z_COL_START, current_y, z_text, content_color, content_font_size)
         current_y -= line_height
         if current_y < 50:  # 50 pixels margin at the bottom
             break
@@ -543,8 +1049,7 @@ def draw_axes_and_labels():
     glEnd()
     try:
         x_pos_3d = gluProject(label_offset, 0, 0, modelview_matrix, projection_matrix, viewport)
-        glWindowPos2d(x_pos_3d[0], x_pos_3d[1])
-        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord('X'))
+        draw_text_2d(x_pos_3d[0], x_pos_3d[1], "X", (1.0, 0.0, 0.0), 18)
     except ValueError:
         pass
     glColor3f(0.0, 1.0, 0.0)
@@ -554,8 +1059,7 @@ def draw_axes_and_labels():
     glEnd()
     try:
         y_pos_3d = gluProject(0, label_offset, 0, modelview_matrix, projection_matrix, viewport)
-        glWindowPos2d(y_pos_3d[0], y_pos_3d[1])
-        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord('Y'))
+        draw_text_2d(y_pos_3d[0], y_pos_3d[1], "Y", (0.0, 1.0, 0.0), 18)
     except ValueError:
         pass
     glColor3f(0.0, 0.0, 1.0)
@@ -565,8 +1069,7 @@ def draw_axes_and_labels():
     glEnd()
     try:
         z_pos_3d = gluProject(0, 0, label_offset, modelview_matrix, projection_matrix, viewport)
-        glWindowPos2d(z_pos_3d[0], z_pos_3d[1])
-        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord('Z'))
+        draw_text_2d(z_pos_3d[0], z_pos_3d[1], "Z", (0.0, 0.0, 1.0), 18)
     except ValueError:
         pass
 
@@ -586,11 +1089,11 @@ def draw_grid():
     glPopMatrix()
 
 # Draw 2D Text
-def draw_text_2d(x, y, text, color, font=GLUT_BITMAP_HELVETICA_18):
-    glColor3f(*color)
-    glWindowPos2d(x, y)
-    for char in text:
-        glutBitmapCharacter(font, ord(char))
+def draw_text_2d(x, y, text, color, font_size=18):
+    """Draw 2D text using OverlayManager"""
+    # Normalize color to 0-255 for Pygame
+    c = (int(color[0]*255), int(color[1]*255), int(color[2]*255))
+    overlay_manager.draw_text(x, y, text, c, font_size)
 
 # -------------------------- Optimization: Joint Trajectory Drawing Function (Solid line -> Green small dots, only visible during playback) --------------------------
 def draw_joint_trajectories(show_trajectories, selected_joints, joint_trajectories, joint_colors, current_frame):
@@ -736,7 +1239,7 @@ def draw_2d_ui(display, current_frame, frames, is_playing, fps, load_btn_rect, e
     text_height = 12
     load_text_x = load_x + (load_width - text_width) / 2 + 8  
     load_text_y = load_y + (load_height + text_height) / 2 - 10  
-    draw_text_2d(load_text_x, load_text_y, load_text, (0.0, 0.0, 0.0), font=GLUT_BITMAP_HELVETICA_12)
+    draw_text_2d(load_text_x, load_text_y, load_text, (0.0, 0.0, 0.0), font_size=12)
     
     # 2. Export Button
     export_x = export_btn_rect.x
@@ -757,7 +1260,7 @@ def draw_2d_ui(display, current_frame, frames, is_playing, fps, load_btn_rect, e
     export_text_height = 12
     export_text_x = export_x + (export_width - export_text_width) / 2 + 8  
     export_text_y = export_y + (export_height + export_text_height) / 2 - 10 
-    draw_text_2d(export_text_x, export_text_y, export_text, (0.0, 0.0, 0.0), font=GLUT_BITMAP_HELVETICA_12)
+    draw_text_2d(export_text_x, export_text_y, export_text, (0.0, 0.0, 0.0), font_size=12)
     
     # 3. Trajectory Settings Button
     traj_x = trajectory_btn_rect.x
@@ -778,14 +1281,14 @@ def draw_2d_ui(display, current_frame, frames, is_playing, fps, load_btn_rect, e
     traj_text_height = 12
     traj_text_x = traj_x + (traj_width - traj_text_width) / 2 + 8  
     traj_text_y = traj_y + (traj_height + traj_text_height) / 2 - 10 
-    draw_text_2d(traj_text_x, traj_text_y, traj_text, (0.0, 0.0, 0.0), font=GLUT_BITMAP_HELVETICA_12)
+    draw_text_2d(traj_text_x, traj_text_y, traj_text, (0.0, 0.0, 0.0), font_size=12)
     
     # Timeline drawing
     if frames > 0:
-        draw_text_2d(timeline_rect.x - 10, timeline_rect.y, "0", (0.0, 0.0, 0.0), font=GLUT_BITMAP_HELVETICA_12)
-        draw_text_2d(timeline_rect.x + timeline_rect.width + 10, timeline_rect.y, str(frames - 1), (0.0, 0.0, 0.0), font=GLUT_BITMAP_HELVETICA_12)
+        draw_text_2d(timeline_rect.x - 10, timeline_rect.y, "0", (0.0, 0.0, 0.0), font_size=12)
+        draw_text_2d(timeline_rect.x + timeline_rect.width + 10, timeline_rect.y, str(frames - 1), (0.0, 0.0, 0.0), font_size=12)
         frame_text = f"Frame: {current_frame}"
-        draw_text_2d((display[0] - len(frame_text)*8) // 2, timeline_rect.y + timeline_rect.height + 5, frame_text, (0.0, 0.0, 0.0), font=GLUT_BITMAP_HELVETICA_12)
+        draw_text_2d((display[0] - len(frame_text)*8) // 2, timeline_rect.y + timeline_rect.height + 5, frame_text, (0.0, 0.0, 0.0), font_size=12)
         
         glColor3f(0.7, 0.7, 0.7)
         glBegin(GL_QUADS)
@@ -840,16 +1343,226 @@ def draw_2d_ui(display, current_frame, frames, is_playing, fps, load_btn_rect, e
     # BVH Data Information Display
     if bvh_fps > 0 and bvh_total_frames > 0:
         bvh_info_text = f"BVH Data: {bvh_fps:.0f}HZ, {bvh_total_frames - 1}Frames"
-        draw_text_2d(10, 30, bvh_info_text, (0.0, 0.0, 0.0), font=GLUT_BITMAP_HELVETICA_12)
+        draw_text_2d(10, 30, bvh_info_text, (0.0, 0.0, 0.0), font_size=12)
     # Software FPS display
     fps_text = f"BVH Viewer: {int(fps)} FPS"
-    draw_text_2d(10, 10, fps_text, (0.0, 0.0, 0.0), font=GLUT_BITMAP_HELVETICA_12)
+    draw_text_2d(10, 10, fps_text, (0.0, 0.0, 0.0), font_size=12)
     
     glEnable(GL_DEPTH_TEST)
     glMatrixMode(GL_PROJECTION)
     glPopMatrix()
     glMatrixMode(GL_MODELVIEW)
     glPopMatrix()
+
+# ======================== 绘制实时模式UI ========================
+def draw_realtime_ui(display, mode_btn_rect, connect_btn_rect, record_btn_rect, calibrate_btn_rect, export_bvh_btn_rect):
+    """绘制实时模式相关的UI按钮和状态信息"""
+    # 导入校准状态类
+    from mocap_connector import CalibrationState
+    
+    glMatrixMode(GL_PROJECTION)
+    glPushMatrix()
+    glLoadIdentity()
+    glOrtho(0, display[0], 0, display[1], -1, 1)
+    glMatrixMode(GL_MODELVIEW)
+    glPushMatrix()
+    glLoadIdentity()
+    glDisable(GL_DEPTH_TEST)
+    
+    # 1. Mode Button (模式切换按钮)
+    mode_x = mode_btn_rect.x
+    mode_y = display[1] - mode_btn_rect.y - mode_btn_rect.height
+    mode_width = mode_btn_rect.width
+    mode_height = mode_btn_rect.height
+    # 根据当前模式设置按钮颜色
+    if AppState.mode == AppMode.REALTIME:
+        mode_color = (0.4, 0.8, 0.4)  # 绿色表示实时模式
+    else:
+        mode_color = (0.8, 0.8, 0.8)  # 灰色表示离线模式
+    draw_rectangle(mode_x, mode_y, mode_width, mode_height, mode_color)
+    glColor3f(0.0, 0.0, 0.0)
+    glLineWidth(1.0)
+    glBegin(GL_LINE_LOOP)
+    glVertex2f(mode_x, mode_y)
+    glVertex2f(mode_x + mode_width, mode_y)
+    glVertex2f(mode_x + mode_width, mode_y + mode_height)
+    glVertex2f(mode_x, mode_y + mode_height)
+    glEnd()
+    mode_text = "Realtime" if AppState.mode == AppMode.REALTIME else "Offline"
+    mode_text_width = len(mode_text) * 8
+    mode_text_height = 12
+    mode_text_x = mode_x + (mode_width - mode_text_width) / 2 + 8
+    mode_text_y = mode_y + (mode_height + mode_text_height) / 2 - 10
+    draw_text_2d(mode_text_x, mode_text_y, mode_text, (0.0, 0.0, 0.0), font_size=12)
+    
+    # 2. Connect Button (连接按钮)
+    conn_x = connect_btn_rect.x
+    conn_y = display[1] - connect_btn_rect.y - connect_btn_rect.height
+    conn_width = connect_btn_rect.width
+    conn_height = connect_btn_rect.height
+    # 根据连接状态设置按钮颜色 (修复: 使用is_connected而非is_capturing)
+    if AppState.mocap_connector and AppState.mocap_connector.is_connected:
+        conn_color = (0.4, 0.8, 0.4)  # 绿色表示已连接
+    else:
+        conn_color = (0.8, 0.8, 0.8)  # 灰色表示未连接
+    draw_rectangle(conn_x, conn_y, conn_width, conn_height, conn_color)
+    glColor3f(0.0, 0.0, 0.0)
+    glLineWidth(1.0)
+    glBegin(GL_LINE_LOOP)
+    glVertex2f(conn_x, conn_y)
+    glVertex2f(conn_x + conn_width, conn_y)
+    glVertex2f(conn_x + conn_width, conn_y + conn_height)
+    glVertex2f(conn_x, conn_y + conn_height)
+    glEnd()
+    conn_text = "Disconnect" if (AppState.mocap_connector and AppState.mocap_connector.is_connected) else "Connect"
+    conn_text_width = len(conn_text) * 8
+    conn_text_height = 12
+    conn_text_x = conn_x + (conn_width - conn_text_width) / 2 + 8
+    conn_text_y = conn_y + (conn_height + conn_text_height) / 2 - 10
+    draw_text_2d(conn_text_x, conn_text_y, conn_text, (0.0, 0.0, 0.0), font_size=12)
+    
+    # 3. Record Button (录制按钮)
+    rec_x = record_btn_rect.x
+    rec_y = display[1] - record_btn_rect.y - record_btn_rect.height
+    rec_width = record_btn_rect.width
+    rec_height = record_btn_rect.height
+    # 根据录制状态设置按钮颜色
+    if AppState.recording_manager and AppState.recording_manager.is_recording:
+        rec_color = (0.9, 0.3, 0.3)  # 红色表示正在录制
+    else:
+        rec_color = (0.8, 0.8, 0.8)  # 灰色表示未录制
+    draw_rectangle(rec_x, rec_y, rec_width, rec_height, rec_color)
+    glColor3f(0.0, 0.0, 0.0)
+    glLineWidth(1.0)
+    glBegin(GL_LINE_LOOP)
+    glVertex2f(rec_x, rec_y)
+    glVertex2f(rec_x + rec_width, rec_y)
+    glVertex2f(rec_x + rec_width, rec_y + rec_height)
+    glVertex2f(rec_x, rec_y + rec_height)
+    glEnd()
+    rec_text = "Stop" if (AppState.recording_manager and AppState.recording_manager.is_recording) else "Record"
+    rec_text_width = len(rec_text) * 8
+    rec_text_height = 12
+    rec_text_x = rec_x + (rec_width - rec_text_width) / 2 + 8
+    rec_text_y = rec_y + (rec_height + rec_text_height) / 2 - 10
+    draw_text_2d(rec_text_x, rec_text_y, rec_text, (0.0, 0.0, 0.0), font_size=12)
+    
+    # 4. Calibrate Button (校准按钮) - 新增
+    cal_x = calibrate_btn_rect.x
+    cal_y = display[1] - calibrate_btn_rect.y - calibrate_btn_rect.height
+    cal_width = calibrate_btn_rect.width
+    cal_height = calibrate_btn_rect.height
+    # 根据采集阶段和校准状态设置按钮颜色
+    if AppState.mocap_connector:
+        capture_phase = AppState.mocap_connector.capture_phase
+        cal_state = AppState.mocap_connector.calibration_state
+        
+        if capture_phase == CapturePhase.CALIBRATED and cal_state == CalibrationState.COMPLETED:
+            cal_color = (0.4, 0.8, 0.4)  # 绿色表示已校准
+        elif cal_state in [CalibrationState.PREPARING, CalibrationState.COUNTDOWN, CalibrationState.IN_PROGRESS]:
+            cal_color = (0.9, 0.7, 0.2)  # 橙色表示校准中
+        elif capture_phase == CapturePhase.READY:
+            cal_color = (0.3, 0.7, 0.9)  # 蓝色表示可以校准
+        elif capture_phase == CapturePhase.STABILIZING:
+            cal_color = (0.7, 0.7, 0.7)  # 灰色表示稳定化中
+        elif cal_state == CalibrationState.FAILED:
+            cal_color = (0.9, 0.3, 0.3)  # 红色表示校准失败
+        else:
+            cal_color = (0.8, 0.8, 0.8)  # 灰色
+    else:
+        cal_color = (0.8, 0.8, 0.8)
+    draw_rectangle(cal_x, cal_y, cal_width, cal_height, cal_color)
+    glColor3f(0.0, 0.0, 0.0)
+    glLineWidth(1.0)
+    glBegin(GL_LINE_LOOP)
+    glVertex2f(cal_x, cal_y)
+    glVertex2f(cal_x + cal_width, cal_y)
+    glVertex2f(cal_x + cal_width, cal_y + cal_height)
+    glVertex2f(cal_x, cal_y + cal_height)
+    glEnd()
+    cal_text = "Calibrate"
+    cal_text_width = len(cal_text) * 8
+    cal_text_height = 12
+    cal_text_x = cal_x + (cal_width - cal_text_width) / 2 + 8
+    cal_text_y = cal_y + (cal_height + cal_text_height) / 2 - 10
+    draw_text_2d(cal_text_x, cal_text_y, cal_text, (0.0, 0.0, 0.0), font_size=12)
+    
+    # 5. Export BVH Button (导出BVH按钮)
+    exp_x = export_bvh_btn_rect.x
+    exp_y = display[1] - export_bvh_btn_rect.y - export_bvh_btn_rect.height
+    exp_width = export_bvh_btn_rect.width
+    exp_height = export_bvh_btn_rect.height
+    draw_rectangle(exp_x, exp_y, exp_width, exp_height, (0.8, 0.8, 0.8))
+    glColor3f(0.0, 0.0, 0.0)
+    glLineWidth(1.0)
+    glBegin(GL_LINE_LOOP)
+    glVertex2f(exp_x, exp_y)
+    glVertex2f(exp_x + exp_width, exp_y)
+    glVertex2f(exp_x + exp_width, exp_y + exp_height)
+    glVertex2f(exp_x, exp_y + exp_height)
+    glEnd()
+    exp_text = "Export BVH"
+    exp_text_width = len(exp_text) * 8
+    exp_text_height = 12
+    exp_text_x = exp_x + (exp_width - exp_text_width) / 2 + 8
+    exp_text_y = exp_y + (exp_height + exp_text_height) / 2 - 10
+    draw_text_2d(exp_text_x, exp_text_y, exp_text, (0.0, 0.0, 0.0), font_size=12)
+    
+    # 6. 状态信息显示
+    status_y = 50  # 状态信息显示在左下角
+    if AppState.mode == AppMode.REALTIME:
+        # 显示模式信息
+        mode_info = f"Mode: REALTIME"
+        draw_text_2d(10, status_y, mode_info, (0.0, 0.5, 0.0), font_size=12)
+        status_y += 15
+        
+        # 显示连接状态 (修复: 使用is_connected)
+        if AppState.mocap_connector:
+            if AppState.mocap_connector.is_connected:
+                conn_info = f"Status: Connected ({AppState.mocap_connector.device_ip}:{AppState.mocap_connector.device_port})"
+                draw_text_2d(10, status_y, conn_info, (0.0, 0.5, 0.0), font_size=12)
+            else:
+                conn_info = "Status: Disconnected"
+                draw_text_2d(10, status_y, conn_info, (0.5, 0.0, 0.0), font_size=12)
+            status_y += 15
+        
+        # 显示录制状态
+        if AppState.recording_manager and AppState.recording_manager.is_recording:
+            rec_info = f"Recording: {AppState.recording_manager.get_frame_count()} frames"
+            draw_text_2d(10, status_y, rec_info, (0.9, 0.0, 0.0), font_size=12)
+            status_y += 15
+        
+        # ======================== 采集阶段和校准状态显示 ========================
+        if AppState.mocap_connector and AppState.mocap_connector.is_connected:
+            # 使用综合状态消息（自动根据阶段返回合适的提示）
+            status_msg = AppState.mocap_connector.get_overall_status_message()
+            if status_msg:
+                # 根据采集阶段和校准状态选择颜色
+                capture_phase = AppState.mocap_connector.capture_phase
+                cal_state = AppState.mocap_connector.calibration_state
+                
+                if capture_phase == CapturePhase.CALIBRATED and cal_state == CalibrationState.COMPLETED:
+                    msg_color = (0.0, 0.6, 0.0)  # 绿色
+                elif cal_state in [CalibrationState.PREPARING, CalibrationState.COUNTDOWN, CalibrationState.IN_PROGRESS]:
+                    msg_color = (0.8, 0.5, 0.0)  # 橙色
+                elif capture_phase == CapturePhase.STABILIZING:
+                    msg_color = (0.0, 0.4, 0.8)  # 蓝色
+                elif capture_phase == CapturePhase.READY:
+                    msg_color = (0.0, 0.6, 0.3)  # 淡绿色
+                elif cal_state == CalibrationState.FAILED:
+                    msg_color = (0.8, 0.0, 0.0)  # 红色
+                else:
+                    msg_color = (0.5, 0.5, 0.5)
+                draw_text_2d(10, status_y, status_msg, msg_color, font_size=12)
+                status_y += 15
+        # ======================== 校准状态结束 ========================
+    
+    glEnable(GL_DEPTH_TEST)
+    glMatrixMode(GL_PROJECTION)
+    glPopMatrix()
+    glMatrixMode(GL_MODELVIEW)
+    glPopMatrix()
+# ======================== 绘制实时模式UI结束 ========================
 
 # Draw Joint Angle Label
 def draw_joint_angle_label(joint1_name, joint2_name, joint3_name, joints, display, arc_radius=3.3, color=(0.5, 0.5, 0.5)):
@@ -903,11 +1616,8 @@ def draw_joint_angle_label(joint1_name, joint2_name, joint3_name, joints, displa
     
     try:
         text_pos_2d = gluProject(text_pos_3d[0], text_pos_3d[1], text_pos_3d[2], modelview_matrix, projection_matrix, viewport)
-        glWindowPos2d(text_pos_2d[0], text_pos_2d[1])
-        glColor3f(0.0, 0.0, 0.0)
         angle_text = f"{angle_deg:.1f}°"
-        for char in angle_text:
-            glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, ord(char))
+        draw_text_2d(text_pos_2d[0], text_pos_2d[1], angle_text, (0, 0, 0), 12)
     except ValueError:
         pass
 
@@ -1006,7 +1716,6 @@ def export_data_dialog(all_joints, all_positions, all_velocities, all_accelerati
 # Main function
 def main():
     pygame.init()
-    glutInit()
     
     # -------------------------- Key Modification: Read screen resolution and calculate 3/4 window size --------------------------
     # 1. Get the original resolution of the current computer screen (use available screen size for better accuracy, excluding taskbar etc.)
@@ -1022,6 +1731,9 @@ def main():
     # 3. Initialize window (retain DOUBLEBUF, OPENGL, RESIZABLE features)
     screen = pygame.display.set_mode(display, DOUBLEBUF | OPENGL | pygame.RESIZABLE)
     pygame.display.set_caption("BVH 3D Viewer")  # Window title
+    
+    # Initialize overlay size
+    overlay_manager.update_display_size(display[0], display[1])
     
     # -------------------------- New: Set Title Bar/Thumbnail Logo (retained original code, just adapting to the new window) --------------------------
     try:
@@ -1072,6 +1784,42 @@ def main():
         110,
         btn_height
     )
+    
+    # ======================== 新增实时模式按钮 ========================
+    mode_btn_rect = pygame.Rect(
+        trajectory_btn_rect.x + trajectory_btn_rect.width + 20,  # 加大间隔作为分隔
+        btn_y, 100, btn_height
+    )  # 模式切换按钮
+    
+    connect_btn_rect = pygame.Rect(
+        mode_btn_rect.x + mode_btn_rect.width + 10,
+        btn_y, 100, btn_height
+    )  # 连接/断开按钮
+    
+    record_btn_rect = pygame.Rect(
+        connect_btn_rect.x + connect_btn_rect.width + 10,
+        btn_y, 80, btn_height
+    )  # 录制按钮
+    
+    # ======================== 校准按钮 ========================
+    calibrate_btn_rect = pygame.Rect(
+        record_btn_rect.x + record_btn_rect.width + 10,
+        btn_y, 90, btn_height
+    )  # 校准按钮
+    # ======================== 校准按钮结束 ========================
+    
+    export_bvh_btn_rect = pygame.Rect(
+        calibrate_btn_rect.x + calibrate_btn_rect.width + 10,
+        btn_y, 100, btn_height
+    )  # 导出BVH按钮
+    
+    # ======================== 网球分析按钮 ========================
+    tennis_btn_rect = pygame.Rect(
+        export_bvh_btn_rect.x + export_bvh_btn_rect.width + 10,
+        btn_y, 110, btn_height
+    )  # 网球动作分析按钮
+    # ======================== 新增按钮结束 ========================
+    
     play_pause_btn_rect = pygame.Rect(0, 0, 0, 0) 
     timeline_rect = pygame.Rect(0, 0, 0, 0)
     
@@ -1111,6 +1859,8 @@ def main():
         root.destroy()
         
         if file_path:
+            global current_bvh_file_path
+            current_bvh_file_path = file_path  # 保存文件路径供网球分析使用
             root_joint, joints, motion_data, frames, frame_time = parse_bvh(file_path)
             if root_joint:
                 motion_data = np.array(motion_data)
@@ -1134,9 +1884,184 @@ def main():
                 bvh_fps = 0.0
                 bvh_total_frames = 0
     
+    # ======================== 实时模式辅助函数 ========================
+    def toggle_mode():
+        """Toggle between offline and realtime mode"""
+        if AppState.mode == AppMode.OFFLINE:
+            # 切换到实时模式
+            if AppState.init_realtime_modules():
+                AppState.mode = AppMode.REALTIME
+                print("[Mode] Switched to REALTIME mode")
+            else:
+                print("[Mode] Failed to switch to REALTIME mode - SDK not available")
+        else:
+            # 切换到离线模式
+            if AppState.mocap_connector and AppState.mocap_connector.is_connected:
+                AppState.mocap_connector.stop_capture()
+                AppState.mocap_connector.disconnect()
+            if AppState.recording_manager and AppState.recording_manager.is_recording:
+                AppState.recording_manager.stop_recording()
+            AppState.mode = AppMode.OFFLINE
+            print("[Mode] Switched to OFFLINE mode")
+    
+    def toggle_connection():
+        """Toggle device connection"""
+        if AppState.mode != AppMode.REALTIME or not AppState.mocap_connector:
+            return
+        
+        if not AppState.mocap_connector.is_connected:
+            success, msg = AppState.mocap_connector.connect()
+            if success:
+                AppState.mocap_connector.start_capture()
+                print(f"[Connection] Connected and capturing")
+            else:
+                print(f"[Connection] Failed: {msg}")
+        else:
+            AppState.mocap_connector.stop_capture()
+            AppState.mocap_connector.disconnect()
+            print("[Connection] Disconnected")
+    
+    def toggle_recording():
+        """Toggle recording - 仅在校准完成后才能录制"""
+        if AppState.mode != AppMode.REALTIME or not AppState.recording_manager:
+            return
+        # 检查连接状态
+        if not AppState.mocap_connector or not AppState.mocap_connector.is_connected:
+            print("[Recording] Cannot record - not connected")
+            return
+        
+        # 检查是否已校准
+        if not AppState.mocap_connector.is_ready_for_record():
+            capture_phase = AppState.mocap_connector.capture_phase
+            if capture_phase == CapturePhase.STABILIZING:
+                print(f"[Recording] Cannot record - still stabilizing")
+            elif capture_phase == CapturePhase.READY:
+                print("[Recording] Cannot record - please calibrate first")
+            else:
+                print("[Recording] Cannot record - not ready")
+            return
+        
+        if not AppState.recording_manager.is_recording:
+            AppState.recording_manager.start_recording(fps=60.0)
+        else:
+            AppState.recording_manager.stop_recording()
+    
+    def start_calibration():
+        """
+        开始校准流程 - 仅在采集稳定后才能校准
+        校准姿势由SDK内置管理（V-Pose, B-Pose等）
+        """
+        if AppState.mode != AppMode.REALTIME or not AppState.mocap_connector:
+            print("[Calibration] Not in realtime mode")
+            return
+        if not AppState.mocap_connector.is_connected:
+            print("[Calibration] Not connected")
+            return
+        
+        # 检查采集阶段
+        capture_phase = AppState.mocap_connector.capture_phase
+        if capture_phase == CapturePhase.STABILIZING:
+            remaining = AppState.mocap_connector.stabilize_remaining
+            print(f"[Calibration] Cannot start - still stabilizing ({int(remaining)}s remaining)")
+            return
+        elif capture_phase == CapturePhase.CALIBRATED:
+            print("[Calibration] Already calibrated - recalibration available")
+        
+        # 检查是否可以开始校准
+        if AppState.mocap_connector.can_start_calibration():
+            AppState.mocap_connector.start_calibration()
+        else:
+            print("[Calibration] Cannot start - calibration in progress or not ready")
+    
+    def export_bvh_dialog():
+        """Export recorded data to BVH file"""
+        if not AppState.recording_manager or AppState.recording_manager.get_frame_count() == 0:
+            print("[Export] No recording data to export")
+            return
+        
+        root = tk.Tk()
+        root.withdraw()
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".bvh",
+            filetypes=[("BVH files", "*.bvh")],
+            title="Export BVH File"
+        )
+        root.destroy()
+        
+        if file_path:
+            success = AppState.recording_manager.export_to_bvh(file_path)
+            if success:
+                print(f"[Export] BVH exported to: {file_path}")
+            else:
+                print("[Export] BVH export failed")
+    
+    def update_realtime_joints(frame_data, target_joints):
+        """Update joint matrices from realtime mocap data"""
+        if not frame_data or 'joints' not in frame_data:
+            return
+        
+        for joint_name, data in frame_data['joints'].items():
+            if joint_name not in target_joints:
+                continue
+            
+            joint = target_joints[joint_name]
+            pos = data.get('position', (0.0, 0.0, 0.0))
+            rot = data.get('rotation', (1.0, 0.0, 0.0, 0.0))  # (w, x, y, z)
+            
+            # Build 4x4 transformation matrix from quaternion
+            w, x, y, z = rot
+            
+            # Rotation matrix from quaternion
+            R = np.array([
+                [1-2*y*y-2*z*z, 2*x*y-2*z*w, 2*x*z+2*y*w],
+                [2*x*y+2*z*w, 1-2*x*x-2*z*z, 2*y*z-2*x*w],
+                [2*x*z-2*y*w, 2*y*z+2*x*w, 1-2*x*x-2*y*y]
+            ])
+            
+            # Build 4x4 matrix
+            matrix = np.identity(4)
+            matrix[:3, :3] = R
+            if pos:
+                matrix[:3, 3] = pos
+            
+            joint.matrix = matrix
+    
+    def init_realtime_skeleton():
+        """Initialize skeleton structure for realtime mode"""
+        nonlocal joints, root_joint
+        
+        # 定义关节层级
+        joint_hierarchy = {
+            'Hips': None,
+            'RightUpLeg': 'Hips', 'RightLeg': 'RightUpLeg', 'RightFoot': 'RightLeg',
+            'LeftUpLeg': 'Hips', 'LeftLeg': 'LeftUpLeg', 'LeftFoot': 'LeftLeg',
+            'Spine': 'Hips', 'Spine1': 'Spine', 'Spine2': 'Spine1',
+            'Neck': 'Spine2', 'Neck1': 'Neck', 'Head': 'Neck1',
+            'RightShoulder': 'Spine2', 'RightArm': 'RightShoulder',
+            'RightForeArm': 'RightArm', 'RightHand': 'RightForeArm',
+            'LeftShoulder': 'Spine2', 'LeftArm': 'LeftShoulder',
+            'LeftForeArm': 'LeftArm', 'LeftHand': 'LeftForeArm',
+        }
+        
+        joints.clear()
+        
+        # 创建所有关节
+        for joint_name in joint_hierarchy.keys():
+            parent_name = joint_hierarchy[joint_name]
+            parent = joints.get(parent_name) if parent_name else None
+            joint = Joint(joint_name, parent=parent)
+            joints[joint_name] = joint
+            if parent:
+                parent.add_child(joint)
+        
+        root_joint = joints.get('Hips')
+        return joints, root_joint
+    # ======================== 实时模式辅助函数结束 ========================
+    
     reset_view()
     running = True
     while running:
+        overlay_manager.clear()
         # Play button position update
         play_btn_size = 20
         play_btn_x = (display[0] - play_btn_size) // 2
@@ -1161,6 +2086,7 @@ def main():
                 # Update window size and aspect ratio
                 display = (event.w, event.h)
                 aspect_ratio = event.w / event.h  # Real-time aspect ratio update
+                overlay_manager.update_display_size(event.w, event.h)
                 
                 # Rebuild window: retain DOUBLEBUF + hardware acceleration, prevent buffer clearing
                 pygame.display.set_mode(
@@ -1227,6 +2153,54 @@ def main():
                         timeline_dragging = True
                         is_playing = False
                         current_frame = int((event.pos[0] - timeline_rect.x) / timeline_rect.width * (frames - 1))
+                    # ======================== 新增按钮事件处理 ========================
+                    elif mode_btn_rect.collidepoint(event.pos):
+                        toggle_mode()
+                    elif connect_btn_rect.collidepoint(event.pos):
+                        toggle_connection()
+                    elif record_btn_rect.collidepoint(event.pos):
+                        toggle_recording()
+                    elif calibrate_btn_rect.collidepoint(event.pos):
+                        start_calibration()  # 校准按钮
+                    elif export_bvh_btn_rect.collidepoint(event.pos):
+                        export_bvh_dialog()
+                    # ======================== 网球分析按钮事件 ========================
+                    # ======================== 网球分析按钮事件 ========================
+                    # ======================== 网球分析按钮事件 ========================
+                    elif tennis_btn_rect.collidepoint(event.pos):
+                        if frames > 0 and len(motion_data) > 0:
+                            # 1. 弹出选项窗口 (选择左右手/脚)
+                            options = TennisAnalyzer.get_analysis_options()
+                            
+                            # 如果用户点击了 Cancel 或直接关闭窗口，options 为空，停止执行
+                            if not options:
+                                print("[System] Analysis cancelled.")
+                            else:
+                                print(f"[System] Starting Analysis ({options['hand']} Hand, {options['leg']} Leg)...")
+                                
+                                # 2. 计算当前数据的角速度 (传入左右侧配置)
+                                velocities = TennisAnalyzer.calculate_angular_velocities(
+                                    joints, motion_data, frame_time, 
+                                    hand_side=options['hand'], 
+                                    leg_side=options['leg']
+                                )
+                                
+                                # 3. 获取文件名
+                                try:
+                                    current_fname = os.path.basename(current_bvh_file_path) if current_bvh_file_path else "Session_Data"
+                                except:
+                                    current_fname = "Session_Data"
+                                
+                                # 4. 自动保存当前记录到历史文件
+                                TennisAnalyzer.save_to_history(velocities, current_fname)
+                                
+                                # 5. 打开历史管理器窗口
+                                TennisAnalyzer.open_history_manager()
+                            
+                        else:
+                            print("[System] Error: Please load a BVH file first.")
+
+                    # ======================== 新增按钮事件结束 ========================
             # Mouse Button Up Event
             if event.type == pygame.MOUSEBUTTONUP:
                 if event.button == 1:
@@ -1287,6 +2261,18 @@ def main():
                 # New: F key triggers view reset
                 if event.key == pygame.K_f:
                     reset_view()
+                # ======================== 新增快捷键 ========================
+                if event.key == pygame.K_m:  # M: Toggle mode
+                    toggle_mode()
+                if event.key == pygame.K_c:  # C: Toggle connection
+                    toggle_connection()
+                if event.key == pygame.K_r:  # R: Toggle recording
+                    toggle_recording()
+                if event.key == pygame.K_e:  # E: Export BVH
+                    export_bvh_dialog()
+                if event.key == pygame.K_k:  # K: Calibrate
+                    start_calibration()  # 使用新的校准流程
+                # ======================== 新增快捷键结束 ========================
         
         # Rendering Process (Optimized for real-time when scaling)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -1297,7 +2283,32 @@ def main():
         draw_grid()
         draw_axes_and_labels()
         
-        if root_joint and len(motion_data) > 0:
+        # ======================== 实时模式渲染处理 ========================
+        if AppState.mode == AppMode.REALTIME and AppState.mocap_connector:
+            # 只要连接就持续轮询数据 (修复: 不再检查is_capturing,因为需要轮询才能设置is_capturing)
+            if AppState.mocap_connector.is_connected:
+                # 轮询获取最新数据
+                frame_data = AppState.mocap_connector.poll_and_update()
+                
+                if frame_data:
+                    # 初始化骨骼结构（如果还没有）
+                    if not joints:
+                        init_realtime_skeleton()
+                    
+                    # 更新关节矩阵
+                    update_realtime_joints(frame_data, joints)
+                    
+                    # 如果正在录制，记录这一帧
+                    if AppState.recording_manager and AppState.recording_manager.is_recording:
+                        AppState.recording_manager.record_frame(frame_data['joints'])
+                
+                # 渲染骨骼
+                if joints:
+                    draw_custom_skeleton(joints)
+        # ======================== 实时模式渲染结束 ========================
+        
+        # 离线模式渲染 (Offline mode rendering)
+        elif AppState.mode == AppMode.OFFLINE and root_joint and len(motion_data) > 0:
             # Update Joint Matrix (original logic remains unchanged)
             if is_playing:
                 update_joint_matrices(root_joint, motion_data[current_frame], joints)
@@ -1396,6 +2407,47 @@ def main():
             bvh_total_frames=bvh_total_frames
         )
         
+        # ======================== 绘制实时模式UI按钮 ========================
+        draw_realtime_ui(
+            display,
+            mode_btn_rect,
+            connect_btn_rect,
+            record_btn_rect,
+            calibrate_btn_rect,
+            export_bvh_btn_rect
+        )
+        # ======================== 绘制实时模式UI结束 ========================
+        
+        # ======================== 绘制网球分析按钮 ========================
+        glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity()
+        glOrtho(0, display[0], 0, display[1], -1, 1)
+        glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity()
+        glDisable(GL_DEPTH_TEST)
+
+        # 绘制按钮背景 (淡黄色 #EEDD82)
+        tx = tennis_btn_rect.x
+        ty = display[1] - tennis_btn_rect.y - tennis_btn_rect.height
+        draw_rectangle(tx, ty, tennis_btn_rect.width, tennis_btn_rect.height, (0.93, 0.87, 0.51))
+        
+        # 绘制按钮边框 (黑色)
+        glColor3f(0, 0, 0); glLineWidth(1.0)
+        glBegin(GL_LINE_LOOP)
+        glVertex2f(tx, ty); glVertex2f(tx + tennis_btn_rect.width, ty)
+        glVertex2f(tx + tennis_btn_rect.width, ty + tennis_btn_rect.height); glVertex2f(tx, ty + tennis_btn_rect.height)
+        glEnd()
+
+        # 绘制按钮文字
+        t_label = "Tennis Analyze"
+        label_x = tx + (tennis_btn_rect.width - len(t_label)*7) / 2
+        label_y = ty + (tennis_btn_rect.height - 12) / 2 + 2
+        draw_text_2d(label_x, label_y, t_label, (0, 0, 0), 12)
+
+        # 恢复 3D 状态
+        glEnable(GL_DEPTH_TEST)
+        glMatrixMode(GL_PROJECTION); glPopMatrix()
+        glMatrixMode(GL_MODELVIEW); glPopMatrix()
+        # ======================== 网球分析按钮绘制结束 ========================
+        
         # Draw Position and Velocity Panels
         if all_joint_positions and all_joint_velocities and frames > 0:
             if 0 <= current_frame < len(all_joint_positions) and 0 <= current_frame < len(all_joint_velocities):
@@ -1404,6 +2456,7 @@ def main():
                 draw_position_panel(display, current_positions, joints)
                 draw_velocity_panel(display, current_velocities, joints)
         
+        overlay_manager.render()
         pygame.display.flip()
         
         if is_playing and frame_time > 0:
