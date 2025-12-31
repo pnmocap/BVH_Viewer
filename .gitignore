@@ -1,34 +1,85 @@
-# PyInstaller artifacts
-# bvh_visualizer_improved.exe
-# _internal/
+# ============ Python编译文件 ============
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ============ PyInstaller构建文件 ============
+*.manifest
+*.spec.bak
 build/
 dist/
-*.spec
+*.exe
+*.dll
 
-# Python cache
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-venv/
-ENV/
-
-# IDE configuration
+# ============ IDE配置文件 ============
 .vscode/
 .idea/
 *.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
 
-# System files
+# ============ 编辑器临时文件 ============
+*~
+*.bak
+*.tmp
+*.log
+*.orig
+
+# ============ Python虚拟环境 ============
+venv/
+env/
+ENV/
+.venv
+
+# ============ 系统文件 ============
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Large files
-*.bvh
+# ============ 本地配置文件 ============
+local_config.py
+*.local.py
+config.local.json
+
+# ============ 编译和测试输出 ============
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# ============ BVH Viewer特定文件 ============
+*.bvh.bak
+temp_*.bvh
+debug_*.log
+recorded_*.bvh
 
 
-1.BVH 3D Viewer开发文档集.docx
-2.运行方法.docx
-
-*.docx
-*.txt
-
+# ============ 本地文档（不推送到远端） ============
+MODE_INTRODUCTION.md
+IMPLEMENTATION_SUMMARY.md
+SECAP_QUICKSTART.md
+# ============ 运行时生成数据（不推送） ============
+tennis_analysis_history.json

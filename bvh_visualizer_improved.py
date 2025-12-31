@@ -1,64 +1,189 @@
+# Standard library imports
+import csv
+import json
+import math
+import os
+import sys
+from datetime import datetime
+
+# Third-party library imports
+import colorsys
+import matplotlib.pyplot as plt
+import numpy as np
 import pygame
 from pygame.locals import *
 from OpenGL.GL import *
 from OpenGL.GLU import *
-import numpy as np
-import os
-import sys
 import tkinter as tk
 from tkinter import filedialog, Listbox, Checkbutton, IntVar, messagebox
-import math
-import csv
-import colorsys
-import matplotlib.pyplot as plt
-import json
-from datetime import datetime
-# Removed GLUT imports to avoid NullFunctionError on systems without freeglut.dll
-# We will use Pygame's native 2D rendering for UI and Text overlay.
 
-# ======================== MocapAPI 集成模块 ========================
+# Note: GLUT imports removed to avoid NullFunctionError on systems without freeglut.dll
+# Using Pygame's native 2D rendering for UI and Text overlay
+
+# ======================== Real-time Mode Integration Modules ========================
+# Local module imports (motion capture and recording)
 try:
-    from mocap_connector import MocapConnector, ConnectionState, CapturePhase, CalibrationState
-    from recording_manager import RecordingManager
+    from mocap_connector import (
+        MocapConnector, 
+        ConnectionState, 
+        CapturePhase, 
+        CalibrationState
+    )
     MOCAP_SDK_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: MocapAPI modules not available: {e}")
     MOCAP_SDK_AVAILABLE = False
+    MocapConnector = None
+    ConnectionState = None
+    CapturePhase = None
+    CalibrationState = None
+
+try:
+    from axis_studio_connector import (
+        AxisStudioConnector, 
+        AxisStudioConnectionState
+    )
+    AXIS_STUDIO_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Axis Studio connector not available: {e}")
+    AXIS_STUDIO_AVAILABLE = False
+    AxisStudioConnector = None
+    AxisStudioConnectionState = None
+
+try:
+    from recording_manager import RecordingManager
+    RECORDING_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Recording manager not available: {e}")
+    RECORDING_AVAILABLE = False
+    RecordingManager = None
+
+
+# ======================== UI Configuration Constants ========================
+# These constants can be easily modified for future UI redesign without changing logic
+
+class UIConfig:
+    """UI layout and appearance configuration"""
+    
+    # Window settings
+    WINDOW_SCALE_FACTOR = 0.75  # Window size = 75% of screen resolution
+    DEFAULT_TARGET_FPS = 60
+    
+    # Camera settings
+    CAMERA_FOV = 45  # Field of view in degrees
+    CAMERA_NEAR_CLIP = 0.1
+    CAMERA_FAR_CLIP = 1000.0
+    CAMERA_INIT_Y = -100.0
+    CAMERA_INIT_Z = -300.0
+    
+    # Mouse control sensitivity
+    MOUSE_PAN_SENSITIVITY = 0.2
+    MOUSE_ROTATE_SENSITIVITY = 0.15
+    MOUSE_ZOOM_STEP = 10.0
+    
+    # UI Colors (RGB tuples 0-1)
+    COLOR_BACKGROUND = (1.0, 1.0, 1.0, 1.0)  # White
+    COLOR_MODE_OFFLINE = (0.8, 0.8, 0.8)  # Gray
+    COLOR_MODE_MOCAP = (0.4, 0.8, 0.4)  # Green
+    COLOR_MODE_SECAP = (0.4, 0.7, 0.9)  # Blue
+    COLOR_CONNECTED = (0.4, 0.8, 0.4)  # Green
+    COLOR_RECORDING = (0.9, 0.3, 0.3)  # Red
+    COLOR_TEXT_BLACK = (0.0, 0.0, 0.0)
+    
+    # Button dimensions
+    BUTTON_WIDTH = 80
+    BUTTON_HEIGHT = 30
+    BUTTON_MARGIN = 10
+    
+    # Text rendering
+    FONT_SIZE_DEFAULT = 12
+    FONT_SIZE_TITLE = 16
 
 
 class AppMode:
-    """应用模式枚举"""
+    """Application mode enumeration"""
     OFFLINE = "offline"     # 离线模式 (加载BVH文件)
-    REALTIME = "realtime"   # 实时模式 (连接设备)
+    MOCAP = "mocap"         # Mocap模式 (MocapAPI 直接连接动捕设备)
+    SECAP = "secap"         # Secap模式 (Axis Studio BVH 广播)
 
 
 class AppState:
-    """全局应用状态"""
+    """
+    Global application state manager.
+    
+    This class maintains the current mode (Offline/Mocap/Secap) and manages
+    the lifecycle of various connectors and managers.
+    
+    Attributes:
+        mode: Current application mode (AppMode.OFFLINE/MOCAP/SECAP)
+        mocap_connector: Connection manager for Mocap mode
+        axis_studio_connector: Connection manager for Secap mode
+        recording_manager: Shared recording manager for both real-time modes
+        realtime_joints: Joint data for real-time rendering
+    """
     mode = AppMode.OFFLINE
+    
+    # Mocap 模式连接器
     mocap_connector = None
+    
+    # Secap 模式连接器
+    axis_studio_connector = None
+    
+    # 录制管理器（两种实时模式共用）
     recording_manager = None
     
     # 实时模式相关的关节数据（用于渲染）
     realtime_joints = {}
     
     @classmethod
-    def init_realtime_modules(cls):
-        """初始化实时模式所需的模块"""
+    def init_mocap_mode(cls):
+        """
+        Initialize Mocap mode modules.
+        
+        Returns:
+            bool: True if initialization successful, False otherwise
+        """
         if not MOCAP_SDK_AVAILABLE:
             print("Error: MocapAPI SDK not available")
             return False
         if cls.mocap_connector is None:
             cls.mocap_connector = MocapConnector()
-        if cls.recording_manager is None:
+        if cls.recording_manager is None and RECORDING_AVAILABLE:
+            cls.recording_manager = RecordingManager()
+        return True
+    
+    @classmethod
+    def init_secap_mode(cls):
+        """
+        Initialize Secap mode modules.
+        
+        Returns:
+            bool: True if initialization successful, False otherwise
+        """
+        if not AXIS_STUDIO_AVAILABLE:
+            print("Error: Axis Studio connector not available")
+            return False
+        if cls.axis_studio_connector is None:
+            cls.axis_studio_connector = AxisStudioConnector()
+        if cls.recording_manager is None and RECORDING_AVAILABLE:
             cls.recording_manager = RecordingManager()
         return True
     
     @classmethod
     def cleanup(cls):
-        """清理资源"""
+        """
+        Clean up all resources (connections, listeners, etc.).
+        
+        This method should be called before application exit to ensure
+        proper cleanup of network connections and resources.
+        """
+        # 清理 Mocap 连接
         if cls.mocap_connector and cls.mocap_connector.is_connected:
             cls.mocap_connector.disconnect()
-# ======================== MocapAPI 集成模块结束 ========================
+        # 清理 Axis Studio 连接
+        if cls.axis_studio_connector and cls.axis_studio_connector.is_listening:
+            cls.axis_studio_connector.stop_listening()
+# ======================== 实时模式集成模块结束 ========================
 
 # ======================== 网球动作分析模块 (矩阵式交互控制版) ========================
 from matplotlib.widgets import CheckButtons
@@ -525,6 +650,22 @@ overlay_manager = OverlayManager()
 
 # BVH Joint Class
 class Joint:
+    """
+    Represents a single joint in the BVH skeleton hierarchy.
+    
+    Attributes:
+        name (str): Joint name
+        parent (Joint): Parent joint in hierarchy
+        children (list): Child joints
+        offset (np.ndarray): Offset from parent (3D vector)
+        channels (list): Animation channels (e.g., ['Xrotation', 'Yrotation'])
+        matrix (np.ndarray): 4x4 transformation matrix
+        position (np.ndarray): World position
+        velocity (np.ndarray): Linear velocity
+        acceleration (np.ndarray): Linear acceleration
+        rom (dict): Range of motion for rotational channels
+        anatomical_angles (dict): Calculated anatomical angles
+    """
     def __init__(self, name, parent=None):
         self.name = name
         self.children = []
@@ -560,6 +701,22 @@ class Joint:
 
 # BVH File Parser
 def parse_bvh(file_path):
+    """
+    Parse a BVH (BioVision Hierarchy) file.
+    
+    Args:
+        file_path (str): Path to the BVH file
+    
+    Returns:
+        tuple: (root_joint, joints_dict, motion_data, num_frames, frame_time)
+            - root_joint (Joint): Root joint of the skeleton
+            - joints_dict (dict): Dictionary mapping joint names to Joint objects
+            - motion_data (list): List of frames, each frame is a list of channel values
+            - num_frames (int): Total number of frames
+            - frame_time (float): Time per frame in seconds
+        
+        Returns (None, {}, [], 0, 0) if parsing fails.
+    """
     try:
         with open(file_path, 'r') as f:
             lines = f.readlines()
@@ -1356,10 +1513,10 @@ def draw_2d_ui(display, current_frame, frames, is_playing, fps, load_btn_rect, e
 
 # ======================== 绘制实时模式UI ========================
 def draw_realtime_ui(display, mode_btn_rect, connect_btn_rect, record_btn_rect, calibrate_btn_rect, export_bvh_btn_rect):
-    """绘制实时模式相关的UI按钮和状态信息"""
-    # 导入校准状态类
-    from mocap_connector import CalibrationState
-    
+    """
+    绘制实时模式相关的UI按钮和状态信息
+    支持 Mocap 和 Secap 两种模式
+    """
     glMatrixMode(GL_PROJECTION)
     glPushMatrix()
     glLoadIdentity()
@@ -1369,14 +1526,16 @@ def draw_realtime_ui(display, mode_btn_rect, connect_btn_rect, record_btn_rect, 
     glLoadIdentity()
     glDisable(GL_DEPTH_TEST)
     
-    # 1. Mode Button (模式切换按钮)
+    # 1. Mode Button (模式切换按钮：Offline / Mocap / Secap)
     mode_x = mode_btn_rect.x
     mode_y = display[1] - mode_btn_rect.y - mode_btn_rect.height
     mode_width = mode_btn_rect.width
     mode_height = mode_btn_rect.height
     # 根据当前模式设置按钮颜色
-    if AppState.mode == AppMode.REALTIME:
-        mode_color = (0.4, 0.8, 0.4)  # 绿色表示实时模式
+    if AppState.mode == AppMode.MOCAP:
+        mode_color = (0.4, 0.8, 0.4)  # 绿色表示 Mocap 模式
+    elif AppState.mode == AppMode.SECAP:
+        mode_color = (0.4, 0.7, 0.9)  # 蓝色表示 Secap 模式
     else:
         mode_color = (0.8, 0.8, 0.8)  # 灰色表示离线模式
     draw_rectangle(mode_x, mode_y, mode_width, mode_height, mode_color)
@@ -1388,23 +1547,31 @@ def draw_realtime_ui(display, mode_btn_rect, connect_btn_rect, record_btn_rect, 
     glVertex2f(mode_x + mode_width, mode_y + mode_height)
     glVertex2f(mode_x, mode_y + mode_height)
     glEnd()
-    mode_text = "Realtime" if AppState.mode == AppMode.REALTIME else "Offline"
+    if AppState.mode == AppMode.MOCAP:
+        mode_text = "Mocap"
+    elif AppState.mode == AppMode.SECAP:
+        mode_text = "Secap"
+    else:
+        mode_text = "Offline"
     mode_text_width = len(mode_text) * 8
     mode_text_height = 12
     mode_text_x = mode_x + (mode_width - mode_text_width) / 2 + 8
     mode_text_y = mode_y + (mode_height + mode_text_height) / 2 - 10
     draw_text_2d(mode_text_x, mode_text_y, mode_text, (0.0, 0.0, 0.0), font_size=12)
     
-    # 2. Connect Button (连接按钮)
+    # 2. Connect Button (连接按钮 - Mocap/Secap 模式共用)
     conn_x = connect_btn_rect.x
     conn_y = display[1] - connect_btn_rect.y - connect_btn_rect.height
     conn_width = connect_btn_rect.width
     conn_height = connect_btn_rect.height
-    # 根据连接状态设置按钮颜色 (修复: 使用is_connected而非is_capturing)
-    if AppState.mocap_connector and AppState.mocap_connector.is_connected:
-        conn_color = (0.4, 0.8, 0.4)  # 绿色表示已连接
-    else:
-        conn_color = (0.8, 0.8, 0.8)  # 灰色表示未连接
+    # 根据连接状态设置按钮颜色
+    is_connected = False
+    if AppState.mode == AppMode.MOCAP and AppState.mocap_connector:
+        is_connected = AppState.mocap_connector.is_connected
+    elif AppState.mode == AppMode.SECAP and AppState.axis_studio_connector:
+        is_connected = AppState.axis_studio_connector.is_listening
+    
+    conn_color = (0.4, 0.8, 0.4) if is_connected else (0.8, 0.8, 0.8)
     draw_rectangle(conn_x, conn_y, conn_width, conn_height, conn_color)
     glColor3f(0.0, 0.0, 0.0)
     glLineWidth(1.0)
@@ -1414,14 +1581,21 @@ def draw_realtime_ui(display, mode_btn_rect, connect_btn_rect, record_btn_rect, 
     glVertex2f(conn_x + conn_width, conn_y + conn_height)
     glVertex2f(conn_x, conn_y + conn_height)
     glEnd()
-    conn_text = "Disconnect" if (AppState.mocap_connector and AppState.mocap_connector.is_connected) else "Connect"
+    
+    # 按钮文本根据模式调整
+    if AppState.mode == AppMode.MOCAP:
+        conn_text = "Disconnect" if is_connected else "Connect"
+    elif AppState.mode == AppMode.SECAP:
+        conn_text = "Stop" if is_connected else "Listen"
+    else:
+        conn_text = "N/A"
     conn_text_width = len(conn_text) * 8
     conn_text_height = 12
     conn_text_x = conn_x + (conn_width - conn_text_width) / 2 + 8
     conn_text_y = conn_y + (conn_height + conn_text_height) / 2 - 10
     draw_text_2d(conn_text_x, conn_text_y, conn_text, (0.0, 0.0, 0.0), font_size=12)
     
-    # 3. Record Button (录制按钮)
+    # 3. Record Button (录制按钮 - 两种模式共用)
     rec_x = record_btn_rect.x
     rec_y = display[1] - record_btn_rect.y - record_btn_rect.height
     rec_width = record_btn_rect.width
@@ -1447,13 +1621,13 @@ def draw_realtime_ui(display, mode_btn_rect, connect_btn_rect, record_btn_rect, 
     rec_text_y = rec_y + (rec_height + rec_text_height) / 2 - 10
     draw_text_2d(rec_text_x, rec_text_y, rec_text, (0.0, 0.0, 0.0), font_size=12)
     
-    # 4. Calibrate Button (校准按钮) - 新增
+    # 4. Calibrate Button (校准按钮 - 仅 Mocap 模式可用)
     cal_x = calibrate_btn_rect.x
     cal_y = display[1] - calibrate_btn_rect.y - calibrate_btn_rect.height
     cal_width = calibrate_btn_rect.width
     cal_height = calibrate_btn_rect.height
-    # 根据采集阶段和校准状态设置按钮颜色
-    if AppState.mocap_connector:
+    # 根据采集阶段和校准状态设置按钮颜色（仅 Mocap 模式）
+    if AppState.mode == AppMode.MOCAP and AppState.mocap_connector:
         capture_phase = AppState.mocap_connector.capture_phase
         cal_state = AppState.mocap_connector.calibration_state
         
@@ -1470,7 +1644,8 @@ def draw_realtime_ui(display, mode_btn_rect, connect_btn_rect, record_btn_rect, 
         else:
             cal_color = (0.8, 0.8, 0.8)  # 灰色
     else:
-        cal_color = (0.8, 0.8, 0.8)
+        # Secap 模式不需要校准，按钮置灰
+        cal_color = (0.6, 0.6, 0.6)
     draw_rectangle(cal_x, cal_y, cal_width, cal_height, cal_color)
     glColor3f(0.0, 0.0, 0.0)
     glLineWidth(1.0)
@@ -1480,7 +1655,7 @@ def draw_realtime_ui(display, mode_btn_rect, connect_btn_rect, record_btn_rect, 
     glVertex2f(cal_x + cal_width, cal_y + cal_height)
     glVertex2f(cal_x, cal_y + cal_height)
     glEnd()
-    cal_text = "Calibrate"
+    cal_text = "Calibrate" if AppState.mode == AppMode.MOCAP else "N/A"
     cal_text_width = len(cal_text) * 8
     cal_text_height = 12
     cal_text_x = cal_x + (cal_width - cal_text_width) / 2 + 8
@@ -1510,13 +1685,14 @@ def draw_realtime_ui(display, mode_btn_rect, connect_btn_rect, record_btn_rect, 
     
     # 6. 状态信息显示
     status_y = 50  # 状态信息显示在左下角
-    if AppState.mode == AppMode.REALTIME:
-        # 显示模式信息
-        mode_info = f"Mode: REALTIME"
+    
+    # 显示模式信息
+    if AppState.mode == AppMode.MOCAP:
+        mode_info = f"Mode: MOCAP"
         draw_text_2d(10, status_y, mode_info, (0.0, 0.5, 0.0), font_size=12)
         status_y += 15
         
-        # 显示连接状态 (修复: 使用is_connected)
+        # 显示 Mocap 连接状态
         if AppState.mocap_connector:
             if AppState.mocap_connector.is_connected:
                 conn_info = f"Status: Connected ({AppState.mocap_connector.device_ip}:{AppState.mocap_connector.device_port})"
@@ -1525,37 +1701,59 @@ def draw_realtime_ui(display, mode_btn_rect, connect_btn_rect, record_btn_rect, 
                 conn_info = "Status: Disconnected"
                 draw_text_2d(10, status_y, conn_info, (0.5, 0.0, 0.0), font_size=12)
             status_y += 15
+            
+            # Mocap 模式的采集阶段和校准状态
+            if AppState.mocap_connector.is_connected:
+                status_msg = AppState.mocap_connector.get_overall_status_message()
+                if status_msg:
+                    capture_phase = AppState.mocap_connector.capture_phase
+                    cal_state = AppState.mocap_connector.calibration_state
+                    
+                    if capture_phase == CapturePhase.CALIBRATED and cal_state == CalibrationState.COMPLETED:
+                        msg_color = (0.0, 0.6, 0.0)
+                    elif cal_state in [CalibrationState.PREPARING, CalibrationState.COUNTDOWN, CalibrationState.IN_PROGRESS]:
+                        msg_color = (0.8, 0.5, 0.0)
+                    elif capture_phase == CapturePhase.STABILIZING:
+                        msg_color = (0.0, 0.4, 0.8)
+                    elif capture_phase == CapturePhase.READY:
+                        msg_color = (0.0, 0.6, 0.3)
+                    elif cal_state == CalibrationState.FAILED:
+                        msg_color = (0.8, 0.0, 0.0)
+                    else:
+                        msg_color = (0.5, 0.5, 0.5)
+                    draw_text_2d(10, status_y, status_msg, msg_color, font_size=12)
+                    status_y += 15
+    
+    elif AppState.mode == AppMode.SECAP:
+        mode_info = f"Mode: SECAP (Axis Studio)"
+        draw_text_2d(10, status_y, mode_info, (0.0, 0.4, 0.8), font_size=12)
+        status_y += 15
         
-        # 显示录制状态
-        if AppState.recording_manager and AppState.recording_manager.is_recording:
-            rec_info = f"Recording: {AppState.recording_manager.get_frame_count()} frames"
-            draw_text_2d(10, status_y, rec_info, (0.9, 0.0, 0.0), font_size=12)
-            status_y += 15
-        
-        # ======================== 采集阶段和校准状态显示 ========================
-        if AppState.mocap_connector and AppState.mocap_connector.is_connected:
-            # 使用综合状态消息（自动根据阶段返回合适的提示）
-            status_msg = AppState.mocap_connector.get_overall_status_message()
-            if status_msg:
-                # 根据采集阶段和校准状态选择颜色
-                capture_phase = AppState.mocap_connector.capture_phase
-                cal_state = AppState.mocap_connector.calibration_state
-                
-                if capture_phase == CapturePhase.CALIBRATED and cal_state == CalibrationState.COMPLETED:
-                    msg_color = (0.0, 0.6, 0.0)  # 绿色
-                elif cal_state in [CalibrationState.PREPARING, CalibrationState.COUNTDOWN, CalibrationState.IN_PROGRESS]:
-                    msg_color = (0.8, 0.5, 0.0)  # 橙色
-                elif capture_phase == CapturePhase.STABILIZING:
-                    msg_color = (0.0, 0.4, 0.8)  # 蓝色
-                elif capture_phase == CapturePhase.READY:
-                    msg_color = (0.0, 0.6, 0.3)  # 淡绿色
-                elif cal_state == CalibrationState.FAILED:
-                    msg_color = (0.8, 0.0, 0.0)  # 红色
-                else:
-                    msg_color = (0.5, 0.5, 0.5)
-                draw_text_2d(10, status_y, status_msg, msg_color, font_size=12)
+        # 显示 Secap 状态
+        if AppState.axis_studio_connector:
+            status_text = AppState.axis_studio_connector.get_connection_status_text()
+            port_info = f"UDP Port: {AppState.axis_studio_connector.udp_port}"
+            
+            if AppState.axis_studio_connector.is_listening:
+                status_color = (0.0, 0.5, 0.0) if AppState.axis_studio_connector.is_receiving_data else (0.5, 0.5, 0.0)
+                draw_text_2d(10, status_y, f"Status: {status_text}", status_color, font_size=12)
                 status_y += 15
-        # ======================== 校准状态结束 ========================
+                draw_text_2d(10, status_y, port_info, (0.0, 0.4, 0.8), font_size=12)
+                status_y += 15
+                
+                if not AppState.axis_studio_connector.is_receiving_data:
+                    hint = "⚠️ Please start BVH broadcast in Axis Studio"
+                    draw_text_2d(10, status_y, hint, (0.8, 0.5, 0.0), font_size=12)
+                    status_y += 15
+            else:
+                draw_text_2d(10, status_y, "Status: Not Listening", (0.5, 0.0, 0.0), font_size=12)
+                status_y += 15
+    
+    # 显示录制状态（两种模式共用）
+    if AppState.recording_manager and AppState.recording_manager.is_recording:
+        rec_info = f"Recording: {AppState.recording_manager.get_frame_count()} frames"
+        draw_text_2d(10, status_y, rec_info, (0.9, 0.0, 0.0), font_size=12)
+        status_y += 15
     
     glEnable(GL_DEPTH_TEST)
     glMatrixMode(GL_PROJECTION)
@@ -1715,22 +1913,28 @@ def export_data_dialog(all_joints, all_positions, all_velocities, all_accelerati
 
 # Main function
 def main():
+    """
+    Main application entry point.
+    
+    Initializes the pygame window, sets up OpenGL rendering context,
+    and runs the main event loop for the BVH viewer application.
+    
+    The application supports three modes:
+    - Offline: Load and playback BVH files
+    - Mocap: Real-time motion capture from devices
+    - Secap: Real-time data from Axis Studio broadcast
+    """
     pygame.init()
     
-    # -------------------------- Key Modification: Read screen resolution and calculate 3/4 window size --------------------------
-    # 1. Get the original resolution of the current computer screen (use available screen size for better accuracy, excluding taskbar etc.)
-    screen_info = pygame.display.Info()  # Get screen info object
-    original_screen_width = screen_info.current_w  # Available screen width (pixels)
-    original_screen_height = screen_info.current_h  # Available screen height (pixels)
+    # Calculate window size based on screen resolution
+    screen_info = pygame.display.Info()
+    target_display_width = int(screen_info.current_w * UIConfig.WINDOW_SCALE_FACTOR)
+    target_display_height = int(screen_info.current_h * UIConfig.WINDOW_SCALE_FACTOR)
+    display = (target_display_width, target_display_height)
     
-    # 2. Calculate target window size: 3/4 of the original resolution (round down to avoid fractional pixels)
-    target_display_width = int(original_screen_width * 0.75)
-    target_display_height = int(original_screen_height * 0.75)
-    display = (target_display_width, target_display_height)  # Final window size
-    
-    # 3. Initialize window (retain DOUBLEBUF, OPENGL, RESIZABLE features)
+    # Initialize window with OpenGL support
     screen = pygame.display.set_mode(display, DOUBLEBUF | OPENGL | pygame.RESIZABLE)
-    pygame.display.set_caption("BVH 3D Viewer")  # Window title
+    pygame.display.set_caption("BVH 3D Viewer")
     
     # Initialize overlay size
     overlay_manager.update_display_size(display[0], display[1])
@@ -1886,73 +2090,141 @@ def main():
     
     # ======================== 实时模式辅助函数 ========================
     def toggle_mode():
-        """Toggle between offline and realtime mode"""
-        if AppState.mode == AppMode.OFFLINE:
-            # 切换到实时模式
-            if AppState.init_realtime_modules():
-                AppState.mode = AppMode.REALTIME
-                print("[Mode] Switched to REALTIME mode")
-            else:
-                print("[Mode] Failed to switch to REALTIME mode - SDK not available")
-        else:
-            # 切换到离线模式
+        """
+        模式切换：Offline -> Mocap -> Secap -> Offline 循环
+        
+        Offline: 加载 BVH 文件
+        Mocap: MocapAPI 直接连接动捕设备
+        Secap: Axis Studio BVH 广播
+        """
+        # 关闭当前模式的连接
+        if AppState.mode == AppMode.MOCAP:
             if AppState.mocap_connector and AppState.mocap_connector.is_connected:
                 AppState.mocap_connector.stop_capture()
                 AppState.mocap_connector.disconnect()
-            if AppState.recording_manager and AppState.recording_manager.is_recording:
-                AppState.recording_manager.stop_recording()
+        elif AppState.mode == AppMode.SECAP:
+            if AppState.axis_studio_connector and AppState.axis_studio_connector.is_listening:
+                AppState.axis_studio_connector.stop_listening()
+        
+        # 停止录制（如果正在录制）
+        if AppState.recording_manager and AppState.recording_manager.is_recording:
+            AppState.recording_manager.stop_recording()
+        
+        # 切换到下一个模式
+        if AppState.mode == AppMode.OFFLINE:
+            # Offline -> Mocap
+            if AppState.init_mocap_mode():
+                AppState.mode = AppMode.MOCAP
+                print("[Mode] Switched to MOCAP mode")
+            else:
+                print("[Mode] Failed to switch to MOCAP mode - SDK not available")
+        elif AppState.mode == AppMode.MOCAP:
+            # Mocap -> Secap
+            if AppState.init_secap_mode():
+                AppState.mode = AppMode.SECAP
+                print("[Mode] Switched to SECAP mode (Axis Studio)")
+            else:
+                print("[Mode] Failed to switch to SECAP mode - connector not available")
+        elif AppState.mode == AppMode.SECAP:
+            # Secap -> Offline
             AppState.mode = AppMode.OFFLINE
             print("[Mode] Switched to OFFLINE mode")
     
     def toggle_connection():
-        """Toggle device connection"""
-        if AppState.mode != AppMode.REALTIME or not AppState.mocap_connector:
-            return
+        """
+        切换连接状态
         
-        if not AppState.mocap_connector.is_connected:
-            success, msg = AppState.mocap_connector.connect()
-            if success:
-                AppState.mocap_connector.start_capture()
-                print(f"[Connection] Connected and capturing")
+        Mocap 模式：Connect/Disconnect 设备
+        Secap 模式：Listen/Stop UDP 广播
+        """
+        if AppState.mode == AppMode.MOCAP:
+            if not AppState.mocap_connector:
+                return
+            
+            if not AppState.mocap_connector.is_connected:
+                # 连接并启动采集
+                success, msg = AppState.mocap_connector.connect()
+                if success:
+                    AppState.mocap_connector.start_capture()
+                    print(f"[Mocap] Connected and capturing")
+                else:
+                    print(f"[Mocap] Connection failed: {msg}")
             else:
-                print(f"[Connection] Failed: {msg}")
-        else:
-            AppState.mocap_connector.stop_capture()
-            AppState.mocap_connector.disconnect()
-            print("[Connection] Disconnected")
+                # 断开连接
+                AppState.mocap_connector.stop_capture()
+                AppState.mocap_connector.disconnect()
+                print("[Mocap] Disconnected")
+        
+        elif AppState.mode == AppMode.SECAP:
+            if not AppState.axis_studio_connector:
+                return
+            
+            if not AppState.axis_studio_connector.is_listening:
+                # 开始监听 UDP 广播
+                success, msg = AppState.axis_studio_connector.start_listening()
+                if success:
+                    print(f"[Secap] Listening on UDP port {AppState.axis_studio_connector.udp_port}")
+                    print("[Secap] Waiting for Axis Studio BVH broadcast...")
+                else:
+                    print(f"[Secap] Failed to start listening: {msg}")
+            else:
+                # 停止监听
+                AppState.axis_studio_connector.stop_listening()
+                print("[Secap] Stopped listening")
     
     def toggle_recording():
-        """Toggle recording - 仅在校准完成后才能录制"""
-        if AppState.mode != AppMode.REALTIME or not AppState.recording_manager:
-            return
-        # 检查连接状态
-        if not AppState.mocap_connector or not AppState.mocap_connector.is_connected:
-            print("[Recording] Cannot record - not connected")
+        """
+        切换录制状态
+        
+        Mocap 模式：仅在校准完成后才能录制
+        Secap 模式：只要在接收数据就可以录制
+        """
+        if AppState.mode not in [AppMode.MOCAP, AppMode.SECAP] or not AppState.recording_manager:
             return
         
-        # 检查是否已校准
-        if not AppState.mocap_connector.is_ready_for_record():
-            capture_phase = AppState.mocap_connector.capture_phase
-            if capture_phase == CapturePhase.STABILIZING:
-                print(f"[Recording] Cannot record - still stabilizing")
-            elif capture_phase == CapturePhase.READY:
-                print("[Recording] Cannot record - please calibrate first")
-            else:
-                print("[Recording] Cannot record - not ready")
-            return
+        # 检查是否可以录制
+        can_record = False
         
+        if AppState.mode == AppMode.MOCAP:
+            # Mocap 模式：需要连接并已校准
+            if AppState.mocap_connector and AppState.mocap_connector.is_connected:
+                can_record = AppState.mocap_connector.is_ready_for_record()
+                if not can_record and not AppState.recording_manager.is_recording:
+                    capture_phase = AppState.mocap_connector.capture_phase
+                    if capture_phase == CapturePhase.STABILIZING:
+                        print(f"[Recording] Cannot record - still stabilizing")
+                    elif capture_phase == CapturePhase.READY:
+                        print("[Recording] Cannot record - please calibrate first")
+                    else:
+                        print("[Recording] Cannot record - not ready")
+                    return
+        
+        elif AppState.mode == AppMode.SECAP:
+            # Secap 模式：只要在接收数据就可以录制
+            if AppState.axis_studio_connector:
+                can_record = AppState.axis_studio_connector.is_ready_for_recording()
+                if not can_record and not AppState.recording_manager.is_recording:
+                    print("[Recording] Cannot record - not receiving data from Axis Studio")
+                    print("[Recording] Please check: 1) BVH broadcast is enabled 2) Axis Studio is calibrated")
+                    return
+        
+        # 切换录制状态
         if not AppState.recording_manager.is_recording:
-            AppState.recording_manager.start_recording(fps=60.0)
+            if can_record:
+                AppState.recording_manager.start_recording(fps=60.0)
+                print("[Recording] Started")
         else:
             AppState.recording_manager.stop_recording()
+            print("[Recording] Stopped")
     
     def start_calibration():
         """
-        开始校准流程 - 仅在采集稳定后才能校准
-        校准姿势由SDK内置管理（V-Pose, B-Pose等）
+        开始校准流程 - 仅 Mocap 模式可用
+        
+        Secap 模式不需要校准（Axis Studio 中已完成校准）
         """
-        if AppState.mode != AppMode.REALTIME or not AppState.mocap_connector:
-            print("[Calibration] Not in realtime mode")
+        if AppState.mode != AppMode.MOCAP or not AppState.mocap_connector:
+            print("[Calibration] Only available in Mocap mode")
             return
         if not AppState.mocap_connector.is_connected:
             print("[Calibration] Not connected")
@@ -1995,42 +2267,80 @@ def main():
             else:
                 print("[Export] BVH export failed")
     
-    def update_realtime_joints(frame_data, target_joints):
-        """Update joint matrices from realtime mocap data"""
-        if not frame_data or 'joints' not in frame_data:
+    def update_realtime_joints(frame_data, target_joints, root_joint):
+        """
+        Update joint matrices based on real-time motion capture data.
+        
+        This function applies hierarchical transformations to update all joints
+        in the skeleton based on incoming real-time data from Mocap or Secap modes.
+        
+        Design principles:
+        - Root joint (Hips): Uses real-time position as world translation
+        - Child joints: Use predefined bone lengths from RecordingManager.DEFAULT_OFFSETS
+        - Local rotation: Uses quaternions from SDK
+        - World matrix: Computed recursively as M_world = M_parent @ T(offset) @ R(quat)
+        
+        Args:
+            frame_data (dict): Frame data containing 'joints' dictionary
+            target_joints (dict): Dictionary of Joint objects to update
+            root_joint (Joint): Root joint of the skeleton
+        """
+        if (not frame_data) or ('joints' not in frame_data) or (root_joint is None):
             return
         
-        for joint_name, data in frame_data['joints'].items():
-            if joint_name not in target_joints:
-                continue
-            
-            joint = target_joints[joint_name]
-            pos = data.get('position', (0.0, 0.0, 0.0))
+        frame_joints = frame_data['joints']
+        
+        def quat_to_rot3x3(w, x, y, z):
+            """四元数转 3×3 旋转矩阵"""
+            return np.array([
+                [1 - 2 * (y * y + z * z), 2 * (x * y - z * w),     2 * (x * z + y * w)],
+                [2 * (x * y + z * w),     1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                [2 * (x * z - y * w),     2 * (y * z + x * w),     1 - 2 * (x * x + y * y)]
+            ], dtype=float)
+        
+        def update_joint(joint):
+            # 取当前关节的实时数据（可能缺失）
+            data = frame_joints.get(joint.name, {})
             rot = data.get('rotation', (1.0, 0.0, 0.0, 0.0))  # (w, x, y, z)
-            
-            # Build 4x4 transformation matrix from quaternion
             w, x, y, z = rot
             
-            # Rotation matrix from quaternion
-            R = np.array([
-                [1-2*y*y-2*z*z, 2*x*y-2*z*w, 2*x*z+2*y*w],
-                [2*x*y+2*z*w, 1-2*x*x-2*z*z, 2*y*z-2*x*w],
-                [2*x*z-2*y*w, 2*y*z+2*x*w, 1-2*x*x-2*y*y]
-            ])
+            # 构建 4×4 旋转矩阵
+            R3 = quat_to_rot3x3(w, x, y, z)
+            R4 = np.identity(4, dtype=float)
+            R4[:3, :3] = R3
             
-            # Build 4x4 matrix
-            matrix = np.identity(4)
-            matrix[:3, :3] = R
-            if pos:
-                matrix[:3, 3] = pos
+            if joint.parent is None:
+                # 根关节：使用实时 position 作为世界平移
+                pos = np.array(data.get('position', (0.0, 0.0, 0.0)), dtype=float)
+                T = np.identity(4, dtype=float)
+                T[:3, 3] = pos
+                joint.matrix = T @ R4
+            else:
+                # 子关节：使用预定义骨长 offset（RecordingManager.DEFAULT_OFFSETS 已写入 joint.offset）
+                parent_matrix = target_joints[joint.parent.name].matrix
+                T = np.identity(4, dtype=float)
+                T[:3, 3] = joint.offset  # 单位：cm，与离线 BVH 一致
+                joint.matrix = parent_matrix @ T @ R4
             
-            joint.matrix = matrix
+            # 递归更新子节点
+            for child in joint.children:
+                update_joint(child)
+        
+        update_joint(root_joint)
     
     def init_realtime_skeleton():
-        """Initialize skeleton structure for realtime mode"""
+        """
+        Initialize skeleton structure for real-time mode.
+        
+        Creates a standard skeleton hierarchy with predefined bone lengths
+        suitable for real-time motion capture visualization. This skeleton
+        matches the structure used by RecordingManager for BVH export.
+        
+        The skeleton is stored in the nonlocal 'joints' and 'root_joint' variables.
+        """
         nonlocal joints, root_joint
         
-        # 定义关节层级
+        # 定义关节层级（与 RecordingManager.JOINT_HIERARCHY 保持一致）
         joint_hierarchy = {
             'Hips': None,
             'RightUpLeg': 'Hips', 'RightLeg': 'RightUpLeg', 'RightFoot': 'RightLeg',
@@ -2045,11 +2355,20 @@ def main():
         
         joints.clear()
         
-        # 创建所有关节
+        # 创建所有关节，并写入默认 offset（骨长），单位 cm
         for joint_name in joint_hierarchy.keys():
             parent_name = joint_hierarchy[joint_name]
             parent = joints.get(parent_name) if parent_name else None
             joint = Joint(joint_name, parent=parent)
+            
+            # 使用 RecordingManager 中的默认偏移（若不存在则为 0）
+            try:
+                from recording_manager import RecordingManager
+                offset = RecordingManager.DEFAULT_OFFSETS.get(joint_name, (0.0, 0.0, 0.0))
+            except ImportError:
+                offset = (0.0, 0.0, 0.0)
+            joint.set_offset(offset)
+            
             joints[joint_name] = joint
             if parent:
                 parent.add_child(joint)
@@ -2284,7 +2603,8 @@ def main():
         draw_axes_and_labels()
         
         # ======================== 实时模式渲染处理 ========================
-        if AppState.mode == AppMode.REALTIME and AppState.mocap_connector:
+        # Mocap 模式：MocapAPI 直接连接动捕设备
+        if AppState.mode == AppMode.MOCAP and AppState.mocap_connector:
             # 只要连接就持续轮询数据 (修复: 不再检查is_capturing,因为需要轮询才能设置is_capturing)
             if AppState.mocap_connector.is_connected:
                 # 轮询获取最新数据
@@ -2292,11 +2612,34 @@ def main():
                 
                 if frame_data:
                     # 初始化骨骼结构（如果还没有）
-                    if not joints:
+                    if not joints or root_joint is None:
                         init_realtime_skeleton()
                     
-                    # 更新关节矩阵
-                    update_realtime_joints(frame_data, joints)
+                    # 按层级更新关节矩阵（根关节 + 子关节）
+                    update_realtime_joints(frame_data, joints, root_joint)
+                    
+                    # 如果正在录制，记录这一帧
+                    if AppState.recording_manager and AppState.recording_manager.is_recording:
+                        AppState.recording_manager.record_frame(frame_data['joints'])
+                
+                # 渲染骨骼
+                if joints:
+                    draw_custom_skeleton(joints)
+        
+        # Secap 模式：通过 Axis Studio BVH 广播接收数据
+        elif AppState.mode == AppMode.SECAP and AppState.axis_studio_connector:
+            # 只要在监听就持续轮询数据
+            if AppState.axis_studio_connector.is_listening:
+                # 轮询获取最新数据
+                frame_data = AppState.axis_studio_connector.poll_and_update()
+                
+                if frame_data:
+                    # 初始化骨骼结构（如果还没有）
+                    if not joints or root_joint is None:
+                        init_realtime_skeleton()
+                    
+                    # 按层级更新关节矩阵（根关节 + 子关节）
+                    update_realtime_joints(frame_data, joints, root_joint)
                     
                     # 如果正在录制，记录这一帧
                     if AppState.recording_manager and AppState.recording_manager.is_recording:
