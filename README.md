@@ -85,7 +85,7 @@ A comprehensive 3D motion capture data visualization tool supporting offline BVH
 
 3. **Choose Your Workflow**:
    - **For BVH File Analysis**:
-     1. Click "Load" button or drag-and-drop a `.bvh` file
+     1. Click "Load File" button or drag-and-drop a `.bvh` file
      2. Use play controls to view animation
      3. Access "Trajectory" or "Tennis Analysis" for advanced features
    
@@ -399,7 +399,7 @@ class UIConfig:
 
 4. **Calibrate** (1-2 minutes)
    - Press `K` or click "Calibrate" button
-   - Follow on-screen pose instructions (typically F-Pose)
+   - Follow on-screen pose instructions
    - Hold pose during countdown (3-5 seconds)
    - Wait for "✅ 校准完成" confirmation
 
@@ -1065,10 +1065,7 @@ This project is developed for motion capture data visualization and analysis.
 ### Contact
 
 For questions, bug reports, or collaboration inquiries:
-- **GitHub Issues**: [Project Issue Tracker](https://github.com/yourusername/BVH_Viewer/issues)
-- **Email**: your.email@example.com
-- **Documentation**: See [MODE_INTRODUCTION.md](MODE_INTRODUCTION.md) and [SECAP_QUICKSTART.md](SECAP_QUICKSTART.md)
-
+- **Email**: yang.liu@noitom.com
 ---
 
 **⭐ If you find this project useful, please consider giving it a star on GitHub!**
