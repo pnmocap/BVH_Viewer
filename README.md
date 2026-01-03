@@ -24,12 +24,33 @@ A comprehensive 3D motion capture data visualization tool supporting offline BVH
   - Body segment angle analysis
   - Performance metrics visualization
 
+### Modern UI Design
+- **Apple-style Interface**: Inspired by macOS design language with clean aesthetics
+- **Glass Morphism Effects**: Translucent panels with subtle blur for depth perception
+- **Smooth Animations**: Butter-smooth transitions and hover effects (60 FPS)
+- **Intelligent Toast Notifications**: 
+  - Color-coded feedback (Gray for Offline, Green for Mocap, Blue for Secap)
+  - Auto-dismiss with fade-out animation
+  - Non-intrusive positioning (top-right corner)
+  - Support for Success, Warning, Error, Info, and Neutral types
+- **Enhanced Dropdown Menus**: 
+  - Visual mode indicators with colored dots
+  - Clear text labels for each option
+  - Hover highlights with Apple Blue accent
+  - Selected item indicator
+  - Smooth expand/collapse animations
+- **Responsive Layout**: Adapts to different window sizes gracefully
+- **Consistent Color Scheme**: Unified palette across all UI elements
+
 ### Interactive Controls
-- Intuitive mouse-based camera control (pan, rotate, zoom)
-- Timeline scrubbing with frame-by-frame navigation
-- Real-time playback speed adjustment
-- One-click mode switching between three operation modes
-- Comprehensive keyboard shortcuts for all major functions
+- **Apple-style Modern UI**: Glass effects, smooth animations, and elegant design
+- **Intuitive Mode Switching**: Dropdown menu with visual indicators and keyboard shortcuts (Ctrl+1/2/3)
+- **Smart Toast Notifications**: Color-coded feedback system (gray/green/blue for different modes)
+- **Mouse-based Camera Control**: Pan, rotate, zoom with intuitive gestures
+- **Timeline Scrubbing**: Frame-by-frame navigation with visual feedback
+- **Real-time Playback Speed**: Adjustable FPS with smooth transitions
+- **User Preferences**: Automatic saving of panel states and UI configurations
+- **Comprehensive Keyboard Shortcuts**: Fast access to all major functions
 
 ## 🛠️ Technical Stack
 
@@ -81,7 +102,8 @@ A comprehensive 3D motion capture data visualization tool supporting offline BVH
 
 2. **Run the Application**
    - Double-click `BVH_Viewer.exe`
-   - The application window will open with Offline mode active
+   - The application opens with Offline mode active
+   - User preferences are automatically loaded from previous session
 
 3. **Choose Your Workflow**:
    - **For BVH File Analysis**:
@@ -90,17 +112,19 @@ A comprehensive 3D motion capture data visualization tool supporting offline BVH
      3. Access "Trajectory" or "Tennis Analysis" for advanced features
    
    - **For Real-time Motion Capture** (requires hardware):
-     1. Press `M` key twice to switch to Mocap mode
-     2. Click "Connect" button
-     3. Wait for 20-second stabilization
-     4. Click "Calibrate" and follow on-screen instructions
-     5. Click "Record" to start capturing
+     1. Click **Mode** button and select **Mocap** from dropdown (or press `Ctrl+2`)
+     2. Green toast notification confirms mode switch
+     3. Click "Connect" button
+     4. Wait for 20-second stabilization
+     5. Click "Calibrate" and follow on-screen instructions
+     6. Click "Record" to start capturing
    
    - **For Axis Studio Integration**:
      1. Start Axis Studio and enable BVH broadcast (UDP port 7012)
-     2. Press `M` key three times to switch to Secap mode
-     3. Click "Listen" to start receiving data
-     4. Click "Record" when ready to capture
+     2. Click **Mode** button and select **Secap** (or press `Ctrl+3`)
+     3. Blue toast notification confirms mode switch
+     4. Click "Listen" to start receiving data
+     5. Click "Record" when ready to capture
 
 ### For Developers (Source Code)
 
@@ -223,12 +247,32 @@ pyinstaller build.spec
 
 ```
 BVH_Viewer/
-├── bvh_visualizer_improved.py    # Main application (2800+ lines)
+├── bvh_visualizer_improved.py    # Main application (3700+ lines)
 │                                   # - UI rendering and event handling
 │                                   # - 3D OpenGL skeleton visualization
 │                                   # - Mode management and switching
 │                                   # - Kinematic calculations
 │                                   # - Tennis motion analysis
+│                                   # - User preferences management
+│
+├── ui/                             # Apple-style UI module
+│   ├── __init__.py               # UI components export
+│   ├── components.py            # UI components (900+ lines)
+│   │                            # - AppleButton, ButtonManager
+│   │                            # - ToastManager, Toast notifications
+│   │                            # - DropdownMenu with animations
+│   │                            # - Panel, StatusIndicator, Timeline
+│   ├── renderer.py               # OpenGL rendering functions (920+ lines)
+│   │                            # - draw_rounded_rect, draw_circle
+│   │                            # - draw_button, draw_toast_manager
+│   │                            # - draw_dropdown_menu
+│   │                            # - 2D/3D rendering setup
+│   ├── colors.py                 # Color definitions and utilities
+│   │                            # - AppleUIColors (system colors)
+│   │                            # - EnhancedVisuals (gradients, glass effects)
+│   └── metrics.py                # UI metrics and constants
+│                              # - AppleUIMetrics (sizes, spacing)
+│                              # - Animation parameters
 │
 ├── mocap_connector.py              # Mocap mode implementation (600+ lines)
 │                                   # - MocapAPI SDK wrapper
@@ -349,7 +393,29 @@ class AxisStudioConnector:
    - Same computer: `127.0.0.1`
    - Different computer: BVH Viewer machine's IP address
 
-### UI Configuration (Future Customization)
+### User Preferences Configuration
+
+The application automatically saves your UI preferences to ensure a consistent experience across sessions.
+
+**Configuration File Location**:
+- Windows: `C:\Users\<YourName>\AppData\Roaming\BVH_Viewer\bvh_viewer_config.json`
+
+**Saved Preferences Include**:
+```json
+{
+    "show_position_panel": false,      // Position data panel visibility
+    "show_velocity_panel": false,      // Velocity data panel visibility
+    "default_mode": "offline",         // Startup mode (offline/mocap/secap)
+    "last_file_path": "C:/path/...",  // Last opened BVH file
+    "window_width": 1200,              // Window dimensions
+    "window_height": 800
+}
+```
+
+**Manual Editing** (Advanced Users):
+You can directly edit the JSON file to customize default settings. Changes take effect on next application launch.
+
+### UI Configuration (Developer Customization)
 
 UI parameters are centralized in `UIConfig` class (bvh_visualizer_improved.py, lines 45-86):
 
@@ -565,6 +631,9 @@ class UIConfig:
 | Key | Function | Description |
 |-----|----------|-------------|
 | `M` | **Switch Mode** | Cycle through Offline → Mocap → Secap → Offline |
+| `Ctrl+1` | **Switch to Offline** | Directly switch to Offline mode with gray toast notification |
+| `Ctrl+2` | **Switch to Mocap** | Directly switch to Mocap mode with green toast notification |
+| `Ctrl+3` | **Switch to Secap** | Directly switch to Secap mode with blue toast notification |
 | `C` | **Toggle Connection** | Connect/Disconnect (Mocap) or Listen/Stop (Secap) |
 | `K` | **Calibrate** | Start calibration sequence (Mocap mode only) |
 
@@ -591,10 +660,18 @@ class UIConfig:
 #### Mode Switching Panel (Left Bottom)
 | Button | Color | Function |
 |--------|-------|----------|
-| **Mode** | Gray/Green/Blue | Current mode indicator and switcher |
-|  | • Gray = Offline | Click to cycle modes |
-|  | • Green = Mocap | |
-|  | • Blue = Secap | |
+| **Mode** | Gray/Green/Blue | Current mode indicator with dropdown menu |
+|  | • Gray = Offline | Click to open dropdown menu |
+|  | • Green = Mocap | Select mode from list: Offline, Mocap, Secap |
+|  | • Blue = Secap | Each option shows color indicator and text label |
+
+**Dropdown Menu Features**:
+- **Visual Indicators**: Color dots matching mode (gray/green/blue)
+- **Text Labels**: Clear mode names (Offline, Mocap, Secap)
+- **Selection Marker**: Blue dot indicates currently active mode
+- **Hover Feedback**: Light blue highlight on hover
+- **Click to Select**: Choose any mode instantly
+- **Auto-close**: Menu closes after selection or when clicking outside
 
 #### Connection Panel (Real-time Modes)
 | Button | Availability | Function |
@@ -653,6 +730,27 @@ class UIConfig:
 #### Recording Status (All Modes)
 - **Recording**: Frame count and duration
 - **Recorded**: Total frames captured when stopped
+
+### Toast Notification System
+
+**Visual Feedback for All Operations**:
+
+The application uses a sophisticated toast notification system to provide immediate, non-intrusive feedback:
+
+| Notification Type | Color | Use Case | Auto-Dismiss |
+|------------------|-------|----------|-------------|
+| **Success** | Green (#34C759) | Successful operations (Mocap mode switch, connection established) | 3 seconds |
+| **Info** | Blue (#007AFF) | Informational messages (Secap mode switch) | 3 seconds |
+| **Neutral** | Gray (#8E8E93) | Neutral state changes (Offline mode switch) | 3 seconds |
+| **Warning** | Orange (#FF9500) | Caution messages (calibration needed) | 4 seconds |
+| **Error** | Red (#FF3B30) | Operation failures (connection failed, SDK unavailable) | 5 seconds |
+
+**Toast Features**:
+- **Position**: Top-right corner, non-blocking
+- **Animation**: Smooth slide-in from right, fade-out on dismiss
+- **Stacking**: Up to 5 toasts can display simultaneously
+- **Icon**: Each type has a distinct icon (✓, ℹ, ●, ⚠, ✗)
+- **Auto-clear**: Older toasts automatically removed when new ones arrive
 
 ---
 
@@ -845,7 +943,11 @@ If issues persist:
 
 | Module | Lines | Responsibility |
 |--------|-------|----------------|
-| `bvh_visualizer_improved.py` | 2800+ | Main application loop, UI rendering, OpenGL graphics |
+| `bvh_visualizer_improved.py` | 3700+ | Main application loop, UI rendering, OpenGL graphics, mode management |
+| `ui/components.py` | 900+ | Apple-style UI components (buttons, toasts, dropdowns, panels) |
+| `ui/renderer.py` | 920+ | OpenGL 2D/3D rendering functions, drawing utilities |
+| `ui/colors.py` | 200+ | Color definitions, gradients, glass effects |
+| `ui/metrics.py` | 150+ | UI metrics, spacing, animation parameters |
 | `mocap_connector.py` | 600+ | Mocap device communication, calibration, data streaming |
 | `axis_studio_connector.py` | 330+ | UDP broadcast receiver, Axis Studio integration |
 | `recording_manager.py` | 330+ | Frame buffering, BVH export, quaternion math |
@@ -1022,7 +1124,29 @@ def export_to_fbx(self, file_path: str) -> bool:
 
 ## 📜 Version History
 
-### Version 1.0 (Current)
+### Version 1.1 (Current - December 2024)
+- ✅ **UI/UX Overhaul**: Complete redesign with Apple-style interface
+  - Glass morphism effects with translucent panels
+  - Smooth animations at 60 FPS
+  - Modern color scheme and visual hierarchy
+- ✅ **Enhanced Mode Switching**: 
+  - Dropdown menu with visual indicators
+  - Keyboard shortcuts (Ctrl+1/2/3)
+  - Toast notifications for feedback
+- ✅ **Smart Notifications System**:
+  - Color-coded toast messages (Gray/Green/Blue)
+  - Auto-dismiss with fade animations
+  - Support for 5 notification types
+- ✅ **User Preferences**: 
+  - Automatic saving of UI states
+  - Persistent panel visibility settings
+  - Configuration file in AppData
+- ✅ **Improved Components**:
+  - Apple-style buttons with hover effects
+  - Animated dropdown menus
+  - Enhanced status indicators
+
+### Version 1.0 (Initial Release)
 - ✅ Three operation modes (Offline/Mocap/Secap)
 - ✅ Real-time motion capture at 60 FPS
 - ✅ BVH file import/export
