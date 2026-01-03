@@ -68,15 +68,37 @@ class RecordingManager:
     
     # 默认偏移量（单位：cm）
     DEFAULT_OFFSETS = {
-        'Hips': (0.0, 0.0, 0.0),
-        'RightUpLeg': (-8.5, 0.0, 0.0), 'RightLeg': (0.0, -40.0, 0.0), 'RightFoot': (0.0, -40.0, 0.0),
-        'LeftUpLeg': (8.5, 0.0, 0.0), 'LeftLeg': (0.0, -40.0, 0.0), 'LeftFoot': (0.0, -40.0, 0.0),
-        'Spine': (0.0, 10.0, 0.0), 'Spine1': (0.0, 10.0, 0.0), 'Spine2': (0.0, 10.0, 0.0),
-        'Neck': (0.0, 10.0, 0.0), 'Neck1': (0.0, 5.0, 0.0), 'Head': (0.0, 8.0, 0.0),
-        'RightShoulder': (-5.0, 8.0, 0.0), 'RightArm': (-12.0, 0.0, 0.0),
-        'RightForeArm': (-25.0, 0.0, 0.0), 'RightHand': (-25.0, 0.0, 0.0),
-        'LeftShoulder': (5.0, 8.0, 0.0), 'LeftArm': (12.0, 0.0, 0.0),
-        'LeftForeArm': (25.0, 0.0, 0.0), 'LeftHand': (25.0, 0.0, 0.0),
+        'Hips': (0.0, 0.0, 0.0),  # Root joint, position from motion data not offset
+        'RightUpLeg': (-10.0, 0.0, 0.0), 'RightLeg': (0.0, -36.509998, 0.0), 'RightFoot': (0.0, -34.959999, 0.0),
+        'LeftUpLeg': (10.0, 0.0, 0.0), 'LeftLeg': (0.0, -36.509998, 0.0), 'LeftFoot': (0.0, -34.959999, 0.0),
+        'Spine': (0.0, 7.055, 0.0), 'Spine1': (0.0, 15.621, 0.0), 'Spine2': (0.0, 11.086, 0.0),
+        'Neck': (0.0, 16.629, 0.0), 'Neck1': (0.0, 3.855, 0.0), 'Head': (0.0, 3.855, 0.0),
+        'RightShoulder': (-2.52, 11.59, 0.0), 'RightArm': (-11.98, 0.0, 0.0),
+        'RightForeArm': (-19.5, 0.0, 0.0), 'RightHand': (-21.0, 0.0, 0.0),
+        # Right hand fingers - exact offsets from BVH file
+        'RightHandThumb1': (-1.632, -0.408, 2.121), 'RightHandThumb2': (-3.262, 0.0, 0.0), 'RightHandThumb3': (-2.266, 0.0, 0.0),
+        'RightInHandIndex': (-2.855, 0.45, 1.752), 'RightHandIndex1': (-4.621, -0.081, 0.885),
+        'RightHandIndex2': (-3.206, 0.0, 0.0), 'RightHandIndex3': (-1.818, 0.0, 0.0),
+        'RightInHandMiddle': (-2.996, 0.458, 0.671), 'RightHandMiddle1': (-4.583, -0.074, 0.278),
+        'RightHandMiddle2': (-3.498, 0.0, 0.0), 'RightHandMiddle3': (-2.193, 0.0, 0.0),
+        'RightInHandRing': (-2.981, 0.476, -0.114), 'RightHandRing1': (-4.105, -0.02, -0.424),
+        'RightHandRing2': (-3.049, 0.0, 0.0), 'RightHandRing3': (-2.115, 0.0, 0.0),
+        'RightInHandPinky': (-2.8, 0.416, -1.065), 'RightHandPinky1': (-3.668, -0.02, -0.966),
+        'RightHandPinky2': (-2.442, 0.0, 0.0), 'RightHandPinky3': (-1.543, 0.0, 0.0),
+        'LeftShoulder': (2.52, 11.59, 0.0), 'LeftArm': (11.98, 0.0, 0.0),
+        'LeftForeArm': (19.5, 0.0, 0.0), 'LeftHand': (21.0, 0.0, 0.0),
+        # Left hand fingers - exact offsets from BVH file (mirrored)
+        'LeftHandThumb1': (1.632, -0.408, 2.121), 'LeftHandThumb2': (3.262, 0.0, 0.0), 'LeftHandThumb3': (2.266, 0.0, 0.0),
+        'LeftInHandIndex': (2.855, 0.45, 1.752), 'LeftHandIndex1': (4.621, -0.081, 0.885),
+        'LeftHandIndex2': (3.206, 0.0, 0.0), 'LeftHandIndex3': (1.818, 0.0, 0.0),
+        'LeftInHandMiddle': (2.996, 0.458, 0.671), 'LeftHandMiddle1': (4.583, -0.074, 0.278),
+        'LeftHandMiddle2': (3.498, 0.0, 0.0), 'LeftHandMiddle3': (2.193, 0.0, 0.0),
+        'LeftInHandRing': (2.981, 0.476, -0.114), 'LeftHandRing1': (4.105, -0.02, -0.424),
+        'LeftHandRing2': (3.049, 0.0, 0.0), 'LeftHandRing3': (2.115, 0.0, 0.0),
+        'LeftInHandPinky': (2.8, 0.416, -1.065), 'LeftHandPinky1': (3.668, -0.02, -0.966),
+        'LeftHandPinky2': (2.442, 0.0, 0.0), 'LeftHandPinky3': (1.543, 0.0, 0.0),
+        # Additional spine joint
+        'Spine3': (0.0, 8.0, 0.0),
     }
     
     # 末端位点偏移

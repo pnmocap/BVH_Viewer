@@ -58,12 +58,37 @@ except ImportError as e:
     RECORDING_AVAILABLE = False
     RecordingManager = None
 
+# ======================== Apple-style UI Module ========================
+try:
+    from ui import AppleUIColors, AppleUIMetrics, ButtonManager, AppleButton, ButtonStyle
+    from ui import ToastType, ToastManager, DropdownOption, DropdownMenu
+    from ui.renderer import (
+        setup_2d_rendering, cleanup_2d_rendering,
+        draw_apple_button, draw_rounded_rect, draw_shadow,
+        draw_circle, draw_pill, draw_timeline,
+        draw_icon_play, draw_icon_pause, draw_icon_record, draw_icon_stop,
+        draw_toast_manager, draw_dropdown_menu, draw_mode_selector, draw_glass_panel
+    )
+    from ui.animations import get_lerp_animator, EasingFunctions
+    from ui.components import ButtonStyle, ButtonState, StatusIndicator, Timeline
+    APPLE_UI_AVAILABLE = True
+    print("[UI] Apple-style UI module loaded successfully")
+except ImportError as e:
+    print(f"Warning: Apple UI module not available: {e}")
+    APPLE_UI_AVAILABLE = False
+    AppleUIColors = None
+    AppleUIMetrics = None
+    ButtonManager = None
+    AppleButton = None
+    ToastManager = None
+    DropdownMenu = None
+
 
 # ======================== UI Configuration Constants ========================
 # These constants can be easily modified for future UI redesign without changing logic
 
 class UIConfig:
-    """UI layout and appearance configuration"""
+    """UI layout and appearance configuration - Apple Style"""
     
     # Window settings
     WINDOW_SCALE_FACTOR = 0.75  # Window size = 75% of screen resolution
@@ -81,23 +106,68 @@ class UIConfig:
     MOUSE_ROTATE_SENSITIVITY = 0.15
     MOUSE_ZOOM_STEP = 10.0
     
-    # UI Colors (RGB tuples 0-1)
-    COLOR_BACKGROUND = (1.0, 1.0, 1.0, 1.0)  # White
-    COLOR_MODE_OFFLINE = (0.8, 0.8, 0.8)  # Gray
-    COLOR_MODE_MOCAP = (0.4, 0.8, 0.4)  # Green
-    COLOR_MODE_SECAP = (0.4, 0.7, 0.9)  # Blue
-    COLOR_CONNECTED = (0.4, 0.8, 0.4)  # Green
-    COLOR_RECORDING = (0.9, 0.3, 0.3)  # Red
-    COLOR_TEXT_BLACK = (0.0, 0.0, 0.0)
+    # ==================== Apple-style Colors (0-1 range) ====================
+    # Background colors
+    COLOR_BACKGROUND = (0.96, 0.96, 0.96, 1.0)  # Light gray background
+    COLOR_VIEWPORT_BG = (0.98, 0.98, 0.98, 1.0)  # 3D viewport background
+    
+    # Mode indicator colors
+    COLOR_MODE_OFFLINE = (0.56, 0.56, 0.58)  # Gray
+    COLOR_MODE_MOCAP = (0.20, 0.78, 0.35)    # Apple Green
+    COLOR_MODE_SECAP = (0.0, 0.478, 1.0)     # Apple Blue
+    
+    # Status colors
+    COLOR_CONNECTED = (0.20, 0.78, 0.35)     # Green
+    COLOR_RECORDING = (1.0, 0.23, 0.19)      # Apple Red
+    COLOR_WARNING = (1.0, 0.58, 0.0)         # Apple Orange
+    COLOR_CALIBRATING = (1.0, 0.58, 0.0)     # Orange
+    COLOR_CALIBRATED = (0.20, 0.78, 0.35)    # Green
+    
+    # Button colors
+    COLOR_BUTTON_DEFAULT = (0.95, 0.95, 0.97)    # Light gray
+    COLOR_BUTTON_HOVER = (0.90, 0.90, 0.92)      # Slightly darker
+    COLOR_BUTTON_PRESSED = (0.85, 0.85, 0.87)    # Even darker
+    COLOR_BUTTON_DISABLED = (0.95, 0.95, 0.97, 0.5)
+    
+    # Text colors
+    COLOR_TEXT_PRIMARY = (0.0, 0.0, 0.0)         # Black
+    COLOR_TEXT_SECONDARY = (0.24, 0.24, 0.26, 0.6)
+    COLOR_TEXT_ON_ACCENT = (1.0, 1.0, 1.0)       # White
+    
+    # Accent colors
+    COLOR_ACCENT_BLUE = (0.0, 0.478, 1.0)        # #007AFF
+    COLOR_ACCENT_GREEN = (0.20, 0.78, 0.35)      # #34C759
+    COLOR_ACCENT_RED = (1.0, 0.23, 0.19)         # #FF3B30
+    COLOR_ACCENT_ORANGE = (1.0, 0.58, 0.0)       # #FF9500
+    
+    # ==================== Dimensions (Apple style) ====================
+    # Corner radius
+    CORNER_RADIUS_SMALL = 6
+    CORNER_RADIUS_MEDIUM = 10
+    CORNER_RADIUS_LARGE = 14
     
     # Button dimensions
-    BUTTON_WIDTH = 80
-    BUTTON_HEIGHT = 30
-    BUTTON_MARGIN = 10
+    BUTTON_HEIGHT = 36           # Medium button height
+    BUTTON_MIN_WIDTH = 80
+    BUTTON_MARGIN = 8            # Space between buttons
+    BUTTON_PADDING_H = 16        # Horizontal padding
+    
+    # Spacing
+    SPACING_SM = 8
+    SPACING_MD = 12
+    SPACING_LG = 16
+    SPACING_XL = 24
     
     # Text rendering
-    FONT_SIZE_DEFAULT = 12
-    FONT_SIZE_TITLE = 16
+    FONT_SIZE_CAPTION = 11
+    FONT_SIZE_BODY = 13
+    FONT_SIZE_DEFAULT = 14
+    FONT_SIZE_HEADLINE = 16
+    FONT_SIZE_TITLE = 18
+    
+    # Animation
+    ANIMATION_SPEED = 0.15       # Lerp speed for hover effects
+    BUTTON_PRESS_SCALE = 0.96    # Scale factor when button pressed
 
 
 class AppMode:
@@ -105,6 +175,106 @@ class AppMode:
     OFFLINE = "offline"     # 离线模式 (加载BVH文件)
     MOCAP = "mocap"         # Mocap模式 (MocapAPI 直接连接动捕设备)
     SECAP = "secap"         # Secap模式 (Axis Studio BVH 广播)
+
+
+# ======================== User Preferences Management ========================
+class UserPreferences:
+    """
+    Manages user preferences and panel settings.
+    Saves/loads configuration to a JSON file.
+    """
+    CONFIG_FILE = "bvh_viewer_config.json"
+    
+    # Default preferences
+    DEFAULT_PREFS = {
+        "show_position_panel": False,
+        "show_velocity_panel": False,
+        "default_mode": "offline",
+        "window_scale": 0.75,
+        "last_directory": "",
+        "recent_files": [],
+        "ui_theme": "light",
+    }
+    
+    _prefs = None
+    
+    @classmethod
+    def get_config_path(cls):
+        """Get the full path to the config file."""
+        # Store config in user's home directory or app directory
+        if os.name == 'nt':  # Windows
+            config_dir = os.path.join(os.environ.get('APPDATA', '.'), 'BVH_Viewer')
+        else:  # Linux/Mac
+            config_dir = os.path.join(os.path.expanduser('~'), '.bvh_viewer')
+        
+        # Create directory if it doesn't exist
+        if not os.path.exists(config_dir):
+            try:
+                os.makedirs(config_dir)
+            except OSError:
+                config_dir = '.'  # Fall back to current directory
+        
+        return os.path.join(config_dir, cls.CONFIG_FILE)
+    
+    @classmethod
+    def load(cls):
+        """Load preferences from config file."""
+        if cls._prefs is not None:
+            return cls._prefs
+        
+        config_path = cls.get_config_path()
+        try:
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    cls._prefs = json.load(f)
+                    # Merge with defaults to ensure all keys exist
+                    for key, value in cls.DEFAULT_PREFS.items():
+                        if key not in cls._prefs:
+                            cls._prefs[key] = value
+                print(f"[Config] Loaded preferences from {config_path}")
+            else:
+                cls._prefs = cls.DEFAULT_PREFS.copy()
+                print("[Config] Using default preferences")
+        except Exception as e:
+            print(f"[Config] Error loading preferences: {e}")
+            cls._prefs = cls.DEFAULT_PREFS.copy()
+        
+        return cls._prefs
+    
+    @classmethod
+    def save(cls):
+        """Save current preferences to config file."""
+        if cls._prefs is None:
+            return
+        
+        config_path = cls.get_config_path()
+        try:
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(cls._prefs, f, indent=2, ensure_ascii=False)
+            print(f"[Config] Saved preferences to {config_path}")
+        except Exception as e:
+            print(f"[Config] Error saving preferences: {e}")
+    
+    @classmethod
+    def get(cls, key, default=None):
+        """Get a preference value."""
+        if cls._prefs is None:
+            cls.load()
+        return cls._prefs.get(key, default if default is not None else cls.DEFAULT_PREFS.get(key))
+    
+    @classmethod
+    def set(cls, key, value):
+        """Set a preference value."""
+        if cls._prefs is None:
+            cls.load()
+        cls._prefs[key] = value
+    
+    @classmethod
+    def get_all(cls):
+        """Get all preferences."""
+        if cls._prefs is None:
+            cls.load()
+        return cls._prefs.copy()
 
 
 class AppState:
@@ -1000,17 +1170,19 @@ CUSTOM_JOINT_ORDER = [
     'Spine', 'Spine1', 'Spine2',
     'Neck', 'Neck1', 'Head',
     'RightShoulder', 'RightArm', 'RightForeArm', 'RightHand',
+    # Right hand fingers - exact names from BVH file
     'RightHandThumb1', 'RightHandThumb2', 'RightHandThumb3',
-    'RightinHandindex', 'RightHandindex1', 'RightHandindex2', 'RightHandindex3',
-    'RightlnHandMiddle', 'RightHandMiddle1', 'RightHandMiddle2', 'RightHandMiddle3',
-    'RightinHandRing', 'RightHandRing1', 'RightHandRing2', 'RightHandRing3',
-    'RightinHandPinky', 'RightHandPinky1', 'RightHandPinky2', 'RightHandPinky3',
+    'RightInHandIndex', 'RightHandIndex1', 'RightHandIndex2', 'RightHandIndex3',
+    'RightInHandMiddle', 'RightHandMiddle1', 'RightHandMiddle2', 'RightHandMiddle3',
+    'RightInHandRing', 'RightHandRing1', 'RightHandRing2', 'RightHandRing3',
+    'RightInHandPinky', 'RightHandPinky1', 'RightHandPinky2', 'RightHandPinky3',
     'LeftShoulder', 'LeftArm', 'LeftForeArm', 'LeftHand',
+    # Left hand fingers - exact names from BVH file
     'LeftHandThumb1', 'LeftHandThumb2', 'LeftHandThumb3',
-    'LeftinHandindex', 'LeftHandindex1', 'LeftHandindex2', 'LeftHandindex3',
-    'LeftinHandMiddle', 'LeftHandMiddle1', 'LeftHandMiddle2', 'LeftHandMiddle3',
-    'LeftinHandRing', 'LeftHandRing1', 'LeftHandRing2', 'LeftHandRing3',
-    'LeftinHandPinky', 'LeftHandPinky2', 'LeftHandPinky2', 'LeftHandPinky3',
+    'LeftInHandIndex', 'LeftHandIndex1', 'LeftHandIndex2', 'LeftHandIndex3',
+    'LeftInHandMiddle', 'LeftHandMiddle1', 'LeftHandMiddle2', 'LeftHandMiddle3',
+    'LeftInHandRing', 'LeftHandRing1', 'LeftHandRing2', 'LeftHandRing3',
+    'LeftInHandPinky', 'LeftHandPinky1', 'LeftHandPinky2', 'LeftHandPinky3',
     'Spine3'
 ]
 
@@ -1762,6 +1934,267 @@ def draw_realtime_ui(display, mode_btn_rect, connect_btn_rect, record_btn_rect, 
     glPopMatrix()
 # ======================== 绘制实时模式UI结束 ========================
 
+# ======================== Apple-style UI Rendering ========================
+def draw_apple_ui(display, button_manager, overlay_manager):
+    """
+    Draw Apple-style UI elements with rounded buttons and hover effects.
+    
+    Args:
+        display: (width, height) tuple
+        button_manager: ButtonManager instance with registered buttons
+        overlay_manager: OverlayManager for text rendering
+    """
+    if not APPLE_UI_AVAILABLE or button_manager is None:
+        return
+    
+    # Setup 2D rendering
+    setup_2d_rendering(display[0], display[1])
+    
+    # Update button text and styles based on current state
+    _update_apple_button_states(button_manager)
+    
+    # Render all buttons
+    for button in button_manager.get_all_buttons():
+        if button.visible:
+            draw_apple_button(button, display[1])
+            
+            # Special handling for play/pause button - draw icon instead of text
+            if button == button_manager.get_button("play_pause"):
+                # Draw play or pause icon in the center of the button
+                icon_size = min(button.width, button.height) * 0.35
+                
+                # Center the icon properly
+                is_playing_now = getattr(button, '_is_playing', False)
+                if is_playing_now:
+                    # Pause icon (two bars) - center horizontally
+                    icon_x = button.x + (button.width - icon_size) / 2
+                else:
+                    # Play icon (triangle) - offset slightly right for visual balance
+                    icon_x = button.x + (button.width - icon_size * 0.866) / 2 + icon_size * 0.1
+                
+                # Convert to OpenGL coords (Y-axis inverted)
+                icon_y = display[1] - button.y - (button.height + icon_size) / 2
+                
+                # Get icon color based on button state
+                if button._hover_progress > 0 or button._state == ButtonState.PRESSED:
+                    icon_color = (0.0, 0.478, 1.0, 1.0)  # Apple blue on hover
+                else:
+                    icon_color = (0.3, 0.3, 0.3, 0.8)  # Dark gray normal state
+                
+                if is_playing_now:
+                    draw_icon_pause(icon_x, icon_y, icon_size, icon_color)
+                else:
+                    draw_icon_play(icon_x, icon_y, icon_size, icon_color)
+                continue  # Skip text rendering for this button
+            
+            # Draw button text using overlay
+            if overlay_manager and button.text:
+                # Calculate text position (centered)
+                text_color = button.get_colors().text
+                text_color_pygame = (
+                    int(text_color[0] * 255),
+                    int(text_color[1] * 255),
+                    int(text_color[2] * 255)
+                )
+                
+                # Convert to OpenGL coords for text
+                text_x = button.x + button.width // 2 - len(button.text) * 3
+                text_y = display[1] - button.y - button.height // 2 - 5
+                
+                overlay_manager.draw_text(
+                    text_x, text_y, button.text,
+                    text_color_pygame, size=button.font_size
+                )
+    
+    # Draw status indicators
+    _draw_apple_status_bar(display, overlay_manager)
+    
+    # Cleanup 2D rendering
+    cleanup_2d_rendering()
+
+
+def _update_apple_button_states(button_manager):
+    """
+    Update button text and styles based on current application state.
+    """
+    # Mode button
+    mode_btn = button_manager.get_button("mode")
+    if mode_btn:
+        if AppState.mode == AppMode.MOCAP:
+            mode_btn.text = "Mocap"
+            mode_btn.style = ButtonStyle.SUCCESS
+        elif AppState.mode == AppMode.SECAP:
+            mode_btn.text = "Secap"
+            mode_btn.style = ButtonStyle.PRIMARY
+        else:
+            mode_btn.text = "Offline"
+            mode_btn.style = ButtonStyle.SECONDARY
+    
+    # Connect button
+    connect_btn = button_manager.get_button("connect")
+    if connect_btn:
+        is_connected = False
+        if AppState.mode == AppMode.MOCAP and AppState.mocap_connector:
+            is_connected = AppState.mocap_connector.is_connected
+            connect_btn.text = "Disconnect" if is_connected else "Connect"
+        elif AppState.mode == AppMode.SECAP and AppState.axis_studio_connector:
+            is_connected = AppState.axis_studio_connector.is_listening
+            connect_btn.text = "Stop" if is_connected else "Listen"
+        else:
+            connect_btn.text = "N/A"
+            connect_btn.enabled = False
+        
+        connect_btn.enabled = AppState.mode != AppMode.OFFLINE
+        connect_btn.style = ButtonStyle.SUCCESS if is_connected else ButtonStyle.PRIMARY
+    
+    # Calibrate button
+    calibrate_btn = button_manager.get_button("calibrate")
+    if calibrate_btn:
+        if AppState.mode == AppMode.MOCAP and AppState.mocap_connector:
+            calibrate_btn.enabled = True
+            calibrate_btn.text = "Calibrate"  # Restore text when enabled
+            capture_phase = AppState.mocap_connector.capture_phase
+            cal_state = AppState.mocap_connector.calibration_state
+            
+            if capture_phase == CapturePhase.CALIBRATED and cal_state == CalibrationState.COMPLETED:
+                calibrate_btn.style = ButtonStyle.SUCCESS
+                calibrate_btn.text = "Calibrated"
+            elif cal_state in [CalibrationState.PREPARING, CalibrationState.COUNTDOWN, CalibrationState.IN_PROGRESS]:
+                calibrate_btn.style = ButtonStyle.WARNING
+                calibrate_btn.text = "Calibrating..."
+            elif capture_phase == CapturePhase.READY:
+                calibrate_btn.style = ButtonStyle.PRIMARY
+            else:
+                calibrate_btn.style = ButtonStyle.SECONDARY
+        elif AppState.mode == AppMode.SECAP:
+            # Secap mode doesn't need calibration
+            calibrate_btn.enabled = False
+            calibrate_btn.text = "N/A"
+            calibrate_btn.style = ButtonStyle.SECONDARY
+        else:
+            # Offline mode
+            calibrate_btn.enabled = False
+            calibrate_btn.text = "Calibrate"
+            calibrate_btn.style = ButtonStyle.SECONDARY
+    
+    # Record button
+    record_btn = button_manager.get_button("record")
+    if record_btn:
+        is_recording = AppState.recording_manager and AppState.recording_manager.is_recording
+        record_btn.text = "Stop" if is_recording else "Record"
+        record_btn.style = ButtonStyle.DANGER if is_recording else ButtonStyle.SECONDARY
+        
+        # Enable recording only when appropriate
+        can_record = False
+        if AppState.mode == AppMode.MOCAP and AppState.mocap_connector:
+            can_record = AppState.mocap_connector.is_ready_for_record()
+        elif AppState.mode == AppMode.SECAP and AppState.axis_studio_connector:
+            can_record = AppState.axis_studio_connector.is_ready_for_recording()
+        record_btn.enabled = can_record or is_recording
+    
+    # Export BVH button
+    export_btn = button_manager.get_button("export_bvh")
+    if export_btn:
+        has_data = AppState.recording_manager and AppState.recording_manager.get_frame_count() > 0
+        export_btn.enabled = has_data
+    
+    # Play/Pause button - keep GHOST style for transparent background
+    play_btn = button_manager.get_button("play_pause")
+    if play_btn:
+        # is_playing state is passed via button's custom attribute
+        is_playing_now = getattr(play_btn, '_is_playing', False)
+        # Keep text for reference but icon will be drawn instead
+        play_btn.text = "❚❚" if is_playing_now else "▶"
+        # Keep GHOST style for transparent background
+        play_btn.style = ButtonStyle.GHOST
+
+
+def _draw_apple_status_bar(display, overlay_manager):
+    """
+    Draw status information at the bottom of the screen.
+    """
+    if not overlay_manager:
+        return
+    
+    status_y = 50  # Distance from bottom
+    
+    # Mode indicator
+    if AppState.mode == AppMode.MOCAP:
+        mode_text = "Mode: MOCAP"
+        mode_color = (0, 180, 90)
+    elif AppState.mode == AppMode.SECAP:
+        mode_text = "Mode: SECAP (Axis Studio)"
+        mode_color = (0, 120, 255)
+    else:
+        mode_text = "Mode: OFFLINE"
+        mode_color = (140, 140, 145)
+    
+    overlay_manager.draw_text(12, status_y, mode_text, mode_color, size=13)
+    status_y += 18
+    
+    # Connection status
+    if AppState.mode == AppMode.MOCAP and AppState.mocap_connector:
+        if AppState.mocap_connector.is_connected:
+            status_text = f"Connected to {AppState.mocap_connector.device_ip}"
+            overlay_manager.draw_text(12, status_y, status_text, (0, 180, 90), size=12)
+        else:
+            overlay_manager.draw_text(12, status_y, "Disconnected", (180, 0, 0), size=12)
+        status_y += 16
+        
+        # Calibration progress display
+        cal_state = AppState.mocap_connector.calibration_state
+        if cal_state == CalibrationState.PREPARING:
+            pose_name = AppState.mocap_connector.calibration_pose_name or "Preparing"
+            cal_text = f"Calibration: Preparing {pose_name}..."
+            overlay_manager.draw_text(12, status_y, cal_text, (255, 180, 0), size=12)
+            status_y += 16
+        elif cal_state == CalibrationState.COUNTDOWN:
+            pose_name = AppState.mocap_connector.calibration_pose_name or "Pose"
+            countdown = AppState.mocap_connector.calibration_countdown
+            cal_text = f"Calibration: {pose_name} - Countdown {countdown}s"
+            overlay_manager.draw_text(12, status_y, cal_text, (255, 200, 0), size=12)
+            status_y += 16
+        elif cal_state == CalibrationState.IN_PROGRESS:
+            pose_name = AppState.mocap_connector.calibration_pose_name or "Pose"
+            progress = AppState.mocap_connector.calibration_progress
+            cal_text = f"Calibration: {pose_name} - {progress}%"
+            # Draw progress bar
+            overlay_manager.draw_text(12, status_y, cal_text, (0, 200, 255), size=12)
+            status_y += 16
+            # Visual progress bar
+            bar_x = 12
+            bar_y_gl = status_y - 5
+            bar_width = 200
+            bar_height = 6
+            # Background bar
+            draw_rounded_rect(bar_x, bar_y_gl, bar_width, bar_height, 3, (0.3, 0.3, 0.3, 0.8))
+            # Progress bar
+            progress_width = int(bar_width * progress / 100)
+            if progress_width > 0:
+                draw_rounded_rect(bar_x, bar_y_gl, progress_width, bar_height, 3, (0.0, 0.78, 1.0, 1.0))
+            status_y += 12
+        elif cal_state == CalibrationState.COMPLETED:
+            overlay_manager.draw_text(12, status_y, "Calibration: Completed ✓", (0, 220, 100), size=12)
+            status_y += 16
+        elif cal_state == CalibrationState.FAILED:
+            overlay_manager.draw_text(12, status_y, "Calibration: Failed ✗", (255, 60, 50), size=12)
+            status_y += 16
+            
+    elif AppState.mode == AppMode.SECAP and AppState.axis_studio_connector:
+        status_text = AppState.axis_studio_connector.get_connection_status_text()
+        if AppState.axis_studio_connector.is_receiving_data:
+            overlay_manager.draw_text(12, status_y, f"Status: {status_text}", (0, 180, 90), size=12)
+        else:
+            overlay_manager.draw_text(12, status_y, f"Status: {status_text}", (200, 140, 0), size=12)
+        status_y += 16
+    
+    # Recording status
+    if AppState.recording_manager and AppState.recording_manager.is_recording:
+        frame_count = AppState.recording_manager.get_frame_count()
+        rec_text = f"● Recording: {frame_count} frames"
+        overlay_manager.draw_text(12, status_y, rec_text, (255, 60, 50), size=13)
+# ======================== Apple-style UI Rendering End ========================
+
 # Draw Joint Angle Label
 def draw_joint_angle_label(joint1_name, joint2_name, joint3_name, joints, display, arc_radius=3.3, color=(0.5, 0.5, 0.5)):
     if joint1_name not in joints or joint2_name not in joints:
@@ -1972,6 +2405,16 @@ def main():
     joint_trajectories = {}
     joint_colors = {}
     
+    # Joint data panel visibility controls
+    # Load from user preferences
+    prefs = UserPreferences.load()
+    show_position_panel = prefs.get('show_position_panel', False)
+    show_velocity_panel = prefs.get('show_velocity_panel', False)
+    
+    # Realtime mode: track previous positions for velocity calculation
+    realtime_prev_positions = {}  # Previous frame positions
+    realtime_prev_time = None  # Previous frame timestamp
+    
     # Button position initialization (retained original code, will dynamically adjust with window size)
     btn_y = 10
     btn_height = 25
@@ -2026,6 +2469,135 @@ def main():
     
     play_pause_btn_rect = pygame.Rect(0, 0, 0, 0) 
     timeline_rect = pygame.Rect(0, 0, 0, 0)
+    
+    # ======================== Apple-style Button Manager ========================
+    # Initialize button manager for hover/click effects
+    apple_button_manager = None
+    lerp_animator = None
+    toast_manager = None
+    mode_dropdown = None
+    
+    if APPLE_UI_AVAILABLE:
+        apple_button_manager = ButtonManager()
+        lerp_animator = get_lerp_animator()
+        
+        # Initialize Toast notification manager
+        toast_manager = ToastManager()
+        
+        # Mode dropdown callback will be set later after switch_to_mode is defined
+        mode_dropdown = DropdownMenu(
+            x=0, y=0, width=130, height=36,
+            options=[
+                DropdownOption("offline", "Offline", color=(0.56, 0.56, 0.58, 1.0)),
+                DropdownOption("mocap", "Mocap", color=(0.20, 0.78, 0.35, 1.0)),
+                DropdownOption("secap", "Secap", color=(0.0, 0.478, 1.0, 1.0)),
+            ],
+            selected_id="offline",
+            on_change=None  # Will be set after switch_to_mode is defined
+        )
+        
+        # Define button layout with Apple-style dimensions
+        btn_h = UIConfig.BUTTON_HEIGHT
+        btn_margin = UIConfig.BUTTON_MARGIN
+        btn_y_pos = 12
+        
+        # Left group: File operations
+        apple_button_manager.add_button("load", AppleButton(
+            x=12, y=btn_y_pos, width=90, height=btn_h,
+            text="Load File", style=ButtonStyle.SECONDARY,
+            corner_radius=UIConfig.CORNER_RADIUS_MEDIUM,
+            font_size=UIConfig.FONT_SIZE_BODY
+        ))
+        
+        apple_button_manager.add_button("export_data", AppleButton(
+            x=12 + 90 + btn_margin, y=btn_y_pos, width=100, height=btn_h,
+            text="Export Data", style=ButtonStyle.SECONDARY,
+            corner_radius=UIConfig.CORNER_RADIUS_MEDIUM,
+            font_size=UIConfig.FONT_SIZE_BODY
+        ))
+        
+        apple_button_manager.add_button("trajectory", AppleButton(
+            x=12 + 90 + btn_margin + 100 + btn_margin, y=btn_y_pos, width=100, height=btn_h,
+            text="Trajectory", style=ButtonStyle.SECONDARY,
+            corner_radius=UIConfig.CORNER_RADIUS_MEDIUM,
+            font_size=UIConfig.FONT_SIZE_BODY
+        ))
+        
+        # Center group: Mode and connection (with gap)
+        mode_x = 12 + 90 + btn_margin + 100 + btn_margin + 100 + UIConfig.SPACING_XL
+        
+        apple_button_manager.add_button("mode", AppleButton(
+            x=mode_x, y=btn_y_pos, width=85, height=btn_h,
+            text="Offline", style=ButtonStyle.SECONDARY,
+            corner_radius=UIConfig.CORNER_RADIUS_MEDIUM,
+            font_size=UIConfig.FONT_SIZE_BODY
+        ))
+        
+        apple_button_manager.add_button("connect", AppleButton(
+            x=mode_x + 85 + btn_margin, y=btn_y_pos, width=95, height=btn_h,
+            text="Connect", style=ButtonStyle.PRIMARY,
+            corner_radius=UIConfig.CORNER_RADIUS_MEDIUM,
+            font_size=UIConfig.FONT_SIZE_BODY
+        ))
+        
+        apple_button_manager.add_button("calibrate", AppleButton(
+            x=mode_x + 85 + btn_margin + 95 + btn_margin, y=btn_y_pos, width=90, height=btn_h,
+            text="Calibrate", style=ButtonStyle.SECONDARY,
+            corner_radius=UIConfig.CORNER_RADIUS_MEDIUM,
+            font_size=UIConfig.FONT_SIZE_BODY
+        ))
+        
+        # Right group: Recording
+        rec_x = mode_x + 85 + btn_margin + 95 + btn_margin + 90 + UIConfig.SPACING_LG
+        
+        apple_button_manager.add_button("record", AppleButton(
+            x=rec_x, y=btn_y_pos, width=85, height=btn_h,
+            text="Record", style=ButtonStyle.DANGER,
+            corner_radius=UIConfig.CORNER_RADIUS_MEDIUM,
+            font_size=UIConfig.FONT_SIZE_BODY
+        ))
+        
+        apple_button_manager.add_button("export_bvh", AppleButton(
+            x=rec_x + 85 + btn_margin, y=btn_y_pos, width=100, height=btn_h,
+            text="Export BVH", style=ButtonStyle.SECONDARY,
+            corner_radius=UIConfig.CORNER_RADIUS_MEDIUM,
+            font_size=UIConfig.FONT_SIZE_BODY
+        ))
+        
+        # Tennis analysis button
+        apple_button_manager.add_button("tennis", AppleButton(
+            x=rec_x + 85 + btn_margin + 100 + btn_margin, y=btn_y_pos, width=110, height=btn_h,
+            text="Tennis Analyze", style=ButtonStyle.WARNING,
+            corner_radius=UIConfig.CORNER_RADIUS_MEDIUM,
+            font_size=UIConfig.FONT_SIZE_BODY
+        ))
+        
+        # Bottom row: Playback controls (will be positioned dynamically)
+        # Play/Pause button - positioned at bottom center with transparent background
+        apple_button_manager.add_button("play_pause", AppleButton(
+            x=0, y=0, width=50, height=50,  # Position updated dynamically
+            text="▶", style=ButtonStyle.GHOST,  # Transparent background
+            corner_radius=25,  # Circular button
+            font_size=20
+        ))
+        
+        # Panel toggle buttons (positioned at bottom left)
+        apple_button_manager.add_button("toggle_pos_panel", AppleButton(
+            x=12, y=0, width=100, height=28,  # Position updated dynamically
+            text="Position", style=ButtonStyle.SECONDARY,
+            corner_radius=14,
+            font_size=11
+        ))
+        
+        apple_button_manager.add_button("toggle_vel_panel", AppleButton(
+            x=120, y=0, width=100, height=28,  # Position updated dynamically
+            text="Velocity", style=ButtonStyle.SECONDARY,
+            corner_radius=14,
+            font_size=11
+        ))
+        
+        print(f"[UI] Registered {len(apple_button_manager.buttons)} Apple-style buttons")
+    # ======================== Apple-style Button Manager End ========================
     
     all_joint_positions = []
     all_joint_velocities = []
@@ -2089,6 +2661,75 @@ def main():
                 bvh_total_frames = 0
     
     # ======================== 实时模式辅助函数 ========================
+    def switch_to_mode(target_mode: str):
+        """
+        直接切换到指定模式
+        
+        Args:
+            target_mode: 目标模式 ('offline', 'mocap', 'secap')
+        """
+        nonlocal realtime_prev_positions, realtime_prev_time
+        
+        # 如果已经是目标模式，不需要切换
+        current_mode_str = AppState.mode.lower() if hasattr(AppState.mode, 'lower') else str(AppState.mode).split('.')[-1].lower()
+        if current_mode_str == target_mode.lower():
+            if toast_manager:
+                toast_manager.info(f"已经处于 {target_mode.upper()} 模式")
+            return
+        
+        # 关闭当前模式的连接
+        if AppState.mode == AppMode.MOCAP:
+            if AppState.mocap_connector and AppState.mocap_connector.is_connected:
+                AppState.mocap_connector.stop_capture()
+                AppState.mocap_connector.disconnect()
+        elif AppState.mode == AppMode.SECAP:
+            if AppState.axis_studio_connector and AppState.axis_studio_connector.is_listening:
+                AppState.axis_studio_connector.stop_listening()
+        
+        # 停止录制（如果正在录制）
+        if AppState.recording_manager and AppState.recording_manager.is_recording:
+            AppState.recording_manager.stop_recording()
+        
+        # 重置实时模式的速度计算变量
+        realtime_prev_positions = {}
+        realtime_prev_time = None
+        
+        # 切换到目标模式
+        target_mode = target_mode.lower()
+        if target_mode == 'offline':
+            AppState.mode = AppMode.OFFLINE
+            if toast_manager:
+                toast_manager.show("已切换到 Offline 模式", ToastType.NEUTRAL)  # Gray
+            print("[Mode] Switched to OFFLINE mode")
+        elif target_mode == 'mocap':
+            if AppState.init_mocap_mode():
+                AppState.mode = AppMode.MOCAP
+                if toast_manager:
+                    toast_manager.show("已切换到 Mocap 模式", ToastType.SUCCESS)  # Green
+                print("[Mode] Switched to MOCAP mode")
+            else:
+                if toast_manager:
+                    toast_manager.error("无法切换到 Mocap 模式 - SDK 不可用")
+                print("[Mode] Failed to switch to MOCAP mode - SDK not available")
+        elif target_mode == 'secap':
+            if AppState.init_secap_mode():
+                AppState.mode = AppMode.SECAP
+                if toast_manager:
+                    toast_manager.show("已切换到 Secap 模式", ToastType.INFO)  # Blue
+                print("[Mode] Switched to SECAP mode (Axis Studio)")
+            else:
+                if toast_manager:
+                    toast_manager.error("无法切换到 Secap 模式 - 连接器不可用")
+                print("[Mode] Failed to switch to SECAP mode - connector not available")
+        
+        # 更新下拉菜单的选中状态
+        if mode_dropdown:
+            mode_dropdown.selected_id = target_mode
+    
+    # Set mode dropdown callback after switch_to_mode is defined
+    if mode_dropdown:
+        mode_dropdown.on_change = switch_to_mode
+    
     def toggle_mode():
         """
         模式切换：Offline -> Mocap -> Secap -> Offline 循环
@@ -2109,6 +2750,11 @@ def main():
         # 停止录制（如果正在录制）
         if AppState.recording_manager and AppState.recording_manager.is_recording:
             AppState.recording_manager.stop_recording()
+        
+        # 重置实时模式的速度计算变量
+        nonlocal realtime_prev_positions, realtime_prev_time
+        realtime_prev_positions = {}
+        realtime_prev_time = None
         
         # 切换到下一个模式
         if AppState.mode == AppMode.OFFLINE:
@@ -2137,40 +2783,75 @@ def main():
         Mocap 模式：Connect/Disconnect 设备
         Secap 模式：Listen/Stop UDP 广播
         """
-        if AppState.mode == AppMode.MOCAP:
-            if not AppState.mocap_connector:
+        try:
+            if AppState.mode == AppMode.OFFLINE:
+                print("[System] Cannot connect in Offline mode - switch to Mocap or Secap first")
                 return
             
-            if not AppState.mocap_connector.is_connected:
-                # 连接并启动采集
-                success, msg = AppState.mocap_connector.connect()
-                if success:
-                    AppState.mocap_connector.start_capture()
-                    print(f"[Mocap] Connected and capturing")
+            if AppState.mode == AppMode.MOCAP:
+                if not AppState.mocap_connector:
+                    print("[Mocap] Connector not initialized - try switching mode again")
+                    return
+                
+                if not AppState.mocap_connector.is_connected:
+                    # 连接并启动采集
+                    try:
+                        success, msg = AppState.mocap_connector.connect()
+                        if success:
+                            AppState.mocap_connector.start_capture()
+                            print(f"[Mocap] Connected and capturing")
+                        else:
+                            print(f"[Mocap] Connection failed: {msg}")
+                    except Exception as e:
+                        print(f"[Mocap] Connection error: {e}")
                 else:
-                    print(f"[Mocap] Connection failed: {msg}")
-            else:
-                # 断开连接
-                AppState.mocap_connector.stop_capture()
-                AppState.mocap_connector.disconnect()
-                print("[Mocap] Disconnected")
-        
-        elif AppState.mode == AppMode.SECAP:
-            if not AppState.axis_studio_connector:
-                return
+                    # 断开连接
+                    try:
+                        AppState.mocap_connector.stop_capture()
+                        AppState.mocap_connector.disconnect()
+                        if toast_manager:
+                            toast_manager.info("已断开 Mocap 连接")
+                        print("[Mocap] Disconnected")
+                    except Exception as e:
+                        print(f"[Mocap] Disconnect error: {e}")
             
-            if not AppState.axis_studio_connector.is_listening:
-                # 开始监听 UDP 广播
-                success, msg = AppState.axis_studio_connector.start_listening()
-                if success:
-                    print(f"[Secap] Listening on UDP port {AppState.axis_studio_connector.udp_port}")
-                    print("[Secap] Waiting for Axis Studio BVH broadcast...")
+            elif AppState.mode == AppMode.SECAP:
+                if not AppState.axis_studio_connector:
+                    if toast_manager:
+                        toast_manager.error("Secap 连接器未初始化")
+                    print("[Secap] Connector not initialized - try switching mode again")
+                    return
+                
+                if not AppState.axis_studio_connector.is_listening:
+                    # 开始监听 UDP 广播
+                    try:
+                        success, msg = AppState.axis_studio_connector.start_listening()
+                        if success:
+                            if toast_manager:
+                                toast_manager.success(f"已开始监听 UDP 端口 {AppState.axis_studio_connector.udp_port}")
+                            print(f"[Secap] Listening on UDP port {AppState.axis_studio_connector.udp_port}")
+                            print("[Secap] Waiting for Axis Studio BVH broadcast...")
+                        else:
+                            if toast_manager:
+                                toast_manager.error(f"监听失败: {msg}")
+                            print(f"[Secap] Failed to start listening: {msg}")
+                    except Exception as e:
+                        if toast_manager:
+                            toast_manager.error(f"监听错误: {e}")
+                        print(f"[Secap] Listen error: {e}")
                 else:
-                    print(f"[Secap] Failed to start listening: {msg}")
-            else:
-                # 停止监听
-                AppState.axis_studio_connector.stop_listening()
-                print("[Secap] Stopped listening")
+                    # 停止监听
+                    try:
+                        AppState.axis_studio_connector.stop_listening()
+                        if toast_manager:
+                            toast_manager.info("已停止监听")
+                        print("[Secap] Stopped listening")
+                    except Exception as e:
+                        print(f"[Secap] Stop error: {e}")
+        except Exception as e:
+            if toast_manager:
+                toast_manager.error(f"连接错误: {e}")
+            print(f"[Connection] Unexpected error: {e}")
     
     def toggle_recording():
         """
@@ -2192,10 +2873,16 @@ def main():
                 if not can_record and not AppState.recording_manager.is_recording:
                     capture_phase = AppState.mocap_connector.capture_phase
                     if capture_phase == CapturePhase.STABILIZING:
+                        if toast_manager:
+                            toast_manager.warning("无法录制 - 正在稳定中")
                         print(f"[Recording] Cannot record - still stabilizing")
                     elif capture_phase == CapturePhase.READY:
+                        if toast_manager:
+                            toast_manager.warning("请先进行校准")
                         print("[Recording] Cannot record - please calibrate first")
                     else:
+                        if toast_manager:
+                            toast_manager.warning("无法录制 - 未就绪")
                         print("[Recording] Cannot record - not ready")
                     return
         
@@ -2204,6 +2891,8 @@ def main():
             if AppState.axis_studio_connector:
                 can_record = AppState.axis_studio_connector.is_ready_for_recording()
                 if not can_record and not AppState.recording_manager.is_recording:
+                    if toast_manager:
+                        toast_manager.warning("无法录制 - 未接收到数据")
                     print("[Recording] Cannot record - not receiving data from Axis Studio")
                     print("[Recording] Please check: 1) BVH broadcast is enabled 2) Axis Studio is calibrated")
                     return
@@ -2212,9 +2901,14 @@ def main():
         if not AppState.recording_manager.is_recording:
             if can_record:
                 AppState.recording_manager.start_recording(fps=60.0)
+                if toast_manager:
+                    toast_manager.success("开始录制")
                 print("[Recording] Started")
         else:
             AppState.recording_manager.stop_recording()
+            frame_count = AppState.recording_manager.get_frame_count()
+            if toast_manager:
+                toast_manager.info(f"录制完成 - {frame_count} 帧")
             print("[Recording] Stopped")
     
     def start_calibration():
@@ -2290,6 +2984,18 @@ def main():
         
         frame_joints = frame_data['joints']
         
+        # Debug: Print received joint names once (for first frame)
+        if not hasattr(update_realtime_joints, '_debug_printed'):
+            update_realtime_joints._debug_printed = True
+            received_joints = list(frame_joints.keys())
+            hand_joints_received = [j for j in received_joints if 'Hand' in j]
+            print(f"[Secap] Received {len(received_joints)} joints from Axis Studio")
+            if hand_joints_received:
+                print(f"[Secap] Hand joints in data ({len(hand_joints_received)}): {', '.join(hand_joints_received[:10])}...")
+            else:
+                print(f"[Secap] WARNING: No hand joints in received data!")
+            print(f"[Secap] All joints: {', '.join(received_joints[:20])}...")
+        
         def quat_to_rot3x3(w, x, y, z):
             """四元数转 3×3 旋转矩阵"""
             return np.array([
@@ -2340,7 +3046,7 @@ def main():
         """
         nonlocal joints, root_joint
         
-        # 定义关节层级（与 RecordingManager.JOINT_HIERARCHY 保持一致）
+        # 定义关节层级（与 RecordingManager.JOINT_HIERARCHY 保持一致，并添加手指关节）
         joint_hierarchy = {
             'Hips': None,
             'RightUpLeg': 'Hips', 'RightLeg': 'RightUpLeg', 'RightFoot': 'RightLeg',
@@ -2349,8 +3055,30 @@ def main():
             'Neck': 'Spine2', 'Neck1': 'Neck', 'Head': 'Neck1',
             'RightShoulder': 'Spine2', 'RightArm': 'RightShoulder',
             'RightForeArm': 'RightArm', 'RightHand': 'RightForeArm',
+            # Right hand fingers (exact names from BVH file)
+            'RightHandThumb1': 'RightHand', 'RightHandThumb2': 'RightHandThumb1', 'RightHandThumb3': 'RightHandThumb2',
+            'RightInHandIndex': 'RightHand', 'RightHandIndex1': 'RightInHandIndex', 
+            'RightHandIndex2': 'RightHandIndex1', 'RightHandIndex3': 'RightHandIndex2',
+            'RightInHandMiddle': 'RightHand', 'RightHandMiddle1': 'RightInHandMiddle',
+            'RightHandMiddle2': 'RightHandMiddle1', 'RightHandMiddle3': 'RightHandMiddle2',
+            'RightInHandRing': 'RightHand', 'RightHandRing1': 'RightInHandRing',
+            'RightHandRing2': 'RightHandRing1', 'RightHandRing3': 'RightHandRing2',
+            'RightInHandPinky': 'RightHand', 'RightHandPinky1': 'RightInHandPinky',
+            'RightHandPinky2': 'RightHandPinky1', 'RightHandPinky3': 'RightHandPinky2',
             'LeftShoulder': 'Spine2', 'LeftArm': 'LeftShoulder',
             'LeftForeArm': 'LeftArm', 'LeftHand': 'LeftForeArm',
+            # Left hand fingers (exact names from BVH file)
+            'LeftHandThumb1': 'LeftHand', 'LeftHandThumb2': 'LeftHandThumb1', 'LeftHandThumb3': 'LeftHandThumb2',
+            'LeftInHandIndex': 'LeftHand', 'LeftHandIndex1': 'LeftInHandIndex',
+            'LeftHandIndex2': 'LeftHandIndex1', 'LeftHandIndex3': 'LeftHandIndex2',
+            'LeftInHandMiddle': 'LeftHand', 'LeftHandMiddle1': 'LeftInHandMiddle',
+            'LeftHandMiddle2': 'LeftHandMiddle1', 'LeftHandMiddle3': 'LeftHandMiddle2',
+            'LeftInHandRing': 'LeftHand', 'LeftHandRing1': 'LeftInHandRing',
+            'LeftHandRing2': 'LeftHandRing1', 'LeftHandRing3': 'LeftHandRing2',
+            'LeftInHandPinky': 'LeftHand', 'LeftHandPinky1': 'LeftInHandPinky',
+            'LeftHandPinky2': 'LeftHandPinky1', 'LeftHandPinky3': 'LeftHandPinky2',
+            # Additional spine joint if needed
+            'Spine3': 'Spine2',
         }
         
         joints.clear()
@@ -2360,6 +3088,7 @@ def main():
             parent_name = joint_hierarchy[joint_name]
             parent = joints.get(parent_name) if parent_name else None
             joint = Joint(joint_name, parent=parent)
+            
             
             # 使用 RecordingManager 中的默认偏移（若不存在则为 0）
             try:
@@ -2374,6 +3103,13 @@ def main():
                 parent.add_child(joint)
         
         root_joint = joints.get('Hips')
+        
+        # Debug: Print skeleton structure
+        print(f"[Secap] Initialized realtime skeleton with {len(joints)} joints")
+        hand_joints = [j for j in joints.keys() if 'Hand' in j]
+        if hand_joints:
+            print(f"[Secap] Hand joints ({len(hand_joints)}): {', '.join(hand_joints[:10])}...")
+        
         return joints, root_joint
     # ======================== 实时模式辅助函数结束 ========================
     
@@ -2393,6 +3129,98 @@ def main():
         timeline_height = 8
         timeline_y = play_btn_y - 10 - timeline_height
         timeline_rect.update(timeline_x, timeline_y, timeline_width, timeline_height)
+        
+        # ======================== Apple Button Manager Update ========================
+        # Update button states with hover/click effects
+        apple_clicked_button = None
+        if APPLE_UI_AVAILABLE and apple_button_manager:
+            # Update play/pause button position and state
+            play_btn = apple_button_manager.get_button("play_pause")
+            if play_btn:
+                # Position at bottom right to avoid blocking coordinate system
+                play_btn.x = display[0] - play_btn.width - 20  # 20px from right edge
+                play_btn.y = display[1] - 80 - play_btn.height  # Above panel buttons
+                play_btn._is_playing = is_playing  # Pass state
+            
+            # Update panel toggle buttons position and state
+            pos_panel_btn = apple_button_manager.get_button("toggle_pos_panel")
+            vel_panel_btn = apple_button_manager.get_button("toggle_vel_panel")
+            panel_btn_y = display[1] - 45  # Near bottom
+            
+            if pos_panel_btn:
+                pos_panel_btn.x = 12
+                pos_panel_btn.y = panel_btn_y
+                # Update style based on panel visibility
+                pos_panel_btn.style = ButtonStyle.PRIMARY if show_position_panel else ButtonStyle.SECONDARY
+                pos_panel_btn.text = "✓ Position" if show_position_panel else "Position"
+            
+            if vel_panel_btn:
+                vel_panel_btn.x = 120
+                vel_panel_btn.y = panel_btn_y
+                vel_panel_btn.style = ButtonStyle.PRIMARY if show_velocity_panel else ButtonStyle.SECONDARY
+                vel_panel_btn.text = "✓ Velocity" if show_velocity_panel else "Velocity"
+            
+            mouse_pos = pygame.mouse.get_pos()
+            mouse_buttons = pygame.mouse.get_pressed()
+            apple_clicked_button = apple_button_manager.update(mouse_pos, mouse_buttons)
+            
+            # Handle Apple button clicks
+            if apple_clicked_button:
+                if apple_clicked_button == "load":
+                    load_file_dialog()
+                elif apple_clicked_button == "export_data" and frames > 0:
+                    export_data_dialog(joints, all_joint_positions, all_joint_velocities, all_joint_accelerations, all_anatomical_angles)
+                elif apple_clicked_button == "trajectory":
+                    updated_vals = open_trajectory_settings(
+                        joints, all_joint_positions,
+                        show_trajectories, selected_joints,
+                        joint_trajectories, joint_colors
+                    )
+                    if updated_vals:
+                        show_trajectories, selected_joints, joint_trajectories, joint_colors = updated_vals
+                elif apple_clicked_button == "mode":
+                    # Toggle dropdown menu instead of cycling mode
+                    if mode_dropdown:
+                        mode_dropdown.toggle()
+                    else:
+                        toggle_mode()
+                elif apple_clicked_button == "connect":
+                    toggle_connection()
+                elif apple_clicked_button == "calibrate":
+                    start_calibration()
+                elif apple_clicked_button == "record":
+                    toggle_recording()
+                elif apple_clicked_button == "export_bvh":
+                    export_bvh_dialog()
+                elif apple_clicked_button == "tennis":
+                    if frames > 0 and len(motion_data) > 0:
+                        options = TennisAnalyzer.get_analysis_options()
+                        if options:
+                            print(f"[System] Starting Analysis ({options['hand']} Hand, {options['leg']} Leg)...")
+                            velocities = TennisAnalyzer.calculate_angular_velocities(
+                                joints, motion_data, frame_time,
+                                hand_side=options['hand'],
+                                leg_side=options['leg']
+                            )
+                            try:
+                                current_fname = os.path.basename(current_bvh_file_path) if current_bvh_file_path else "Session_Data"
+                            except:
+                                current_fname = "Session_Data"
+                            TennisAnalyzer.save_to_history(velocities, current_fname)
+                            TennisAnalyzer.open_history_manager()
+                    else:
+                        print("[System] Error: Please load a BVH file first.")
+                elif apple_clicked_button == "play_pause":
+                    toggle_play_pause()
+                elif apple_clicked_button == "toggle_pos_panel":
+                    show_position_panel = not show_position_panel
+                    UserPreferences.set('show_position_panel', show_position_panel)
+                    UserPreferences.save()
+                elif apple_clicked_button == "toggle_vel_panel":
+                    show_velocity_panel = not show_velocity_panel
+                    UserPreferences.set('show_velocity_panel', show_velocity_panel)
+                    UserPreferences.save()
+        # ======================== Apple Button Manager End ========================
         
         # Event Handling (Optimized mouse operation logic)
         for event in pygame.event.get():
@@ -2432,6 +3260,11 @@ def main():
             if event.type == pygame.MOUSEBUTTONDOWN:
                 last_mouse_pos = event.pos
                 
+                # Handle dropdown menu clicks first
+                if mode_dropdown and event.button == 1:
+                    if mode_dropdown.handle_click(event.pos[0], event.pos[1]):
+                        continue  # Dropdown handled the click, skip other processing
+                
                 if event.button == 1:
                     left_button_down = True  # Left-click pan state
                 elif event.button == 2:
@@ -2452,8 +3285,9 @@ def main():
                     cam_forward = cam_forward / np.linalg.norm(cam_forward)
                     glTranslatef(*(cam_forward * -10.0))  # Move against forward direction (Zoom out)
                 
-                # Button click logic (Load/Export etc.) remains unchanged...
-                if event.button == 1:
+                # Button click logic (Load/Export etc.) - Only for legacy UI
+                # Skip if Apple UI is handling buttons
+                if event.button == 1 and not (APPLE_UI_AVAILABLE and apple_button_manager):
                     if load_btn_rect.collidepoint(event.pos):
                         load_file_dialog()
                     elif export_btn_rect.collidepoint(event.pos) and frames > 0:
@@ -2535,6 +3369,10 @@ def main():
                 mouse_x, mouse_y = event.pos
                 rel_x, rel_y = mouse_x - last_mouse_pos[0], mouse_y - last_mouse_pos[1]
                 
+                # Update dropdown hover state
+                if mode_dropdown:
+                    mode_dropdown.handle_hover(mouse_x, mouse_y)
+                
                 # Left-click pan (original logic remains unchanged, retained)
                 if left_button_down and not timeline_dragging:
                     view_matrix = glGetFloatv(GL_MODELVIEW_MATRIX)
@@ -2591,6 +3429,16 @@ def main():
                     export_bvh_dialog()
                 if event.key == pygame.K_k:  # K: Calibrate
                     start_calibration()  # 使用新的校准流程
+                
+                # Ctrl + Number shortcuts for direct mode switching
+                mods = pygame.key.get_mods()
+                if mods & pygame.KMOD_CTRL:
+                    if event.key == pygame.K_1:  # Ctrl+1: Offline mode
+                        switch_to_mode('offline')
+                    elif event.key == pygame.K_2:  # Ctrl+2: Mocap mode
+                        switch_to_mode('mocap')
+                    elif event.key == pygame.K_3:  # Ctrl+3: Secap mode
+                        switch_to_mode('secap')
                 # ======================== 新增快捷键结束 ========================
         
         # Rendering Process (Optimized for real-time when scaling)
@@ -2734,70 +3582,147 @@ def main():
         timeline_rect_opengl = pygame.Rect(timeline_rect.x, timeline_y_bottom_up, timeline_rect.width, timeline_rect.height)
         play_pause_btn_rect_opengl = pygame.Rect(play_pause_btn_rect.x, play_btn_y_bottom_up, play_pause_btn_rect.width, play_pause_btn_rect.height)
         
-        # Draw 2D UI
-        draw_2d_ui(
-            display, 
-            current_frame, 
-            frames, 
-            is_playing, 
-            fps, 
-            load_btn_rect,   # Load Button
-            export_btn_rect, # Export Button
-            trajectory_btn_rect,  # Trajectory Settings Button
-            play_pause_btn_rect_opengl, 
-            timeline_rect_opengl,
-            bvh_fps=bvh_fps,
-            bvh_total_frames=bvh_total_frames
-        )
-        
-        # ======================== 绘制实时模式UI按钮 ========================
-        draw_realtime_ui(
-            display,
-            mode_btn_rect,
-            connect_btn_rect,
-            record_btn_rect,
-            calibrate_btn_rect,
-            export_bvh_btn_rect
-        )
-        # ======================== 绘制实时模式UI结束 ========================
-        
-        # ======================== 绘制网球分析按钮 ========================
-        glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity()
-        glOrtho(0, display[0], 0, display[1], -1, 1)
-        glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity()
-        glDisable(GL_DEPTH_TEST)
+        # ======================== UI绘制选择 ========================
+        if APPLE_UI_AVAILABLE and apple_button_manager:
+            # 苹果风格UI（完全替代传统UI）
+            draw_apple_ui(display, apple_button_manager, overlay_manager)
+        else:
+            # 传统UI（仅在苹果UI不可用时显示）
+            draw_2d_ui(
+                display, 
+                current_frame, 
+                frames, 
+                is_playing, 
+                fps, 
+                load_btn_rect,   # Load Button
+                export_btn_rect, # Export Button
+                trajectory_btn_rect,  # Trajectory Settings Button
+                play_pause_btn_rect_opengl, 
+                timeline_rect_opengl,
+                bvh_fps=bvh_fps,
+                bvh_total_frames=bvh_total_frames
+            )
+            
+            # 绘制实时模式UI按钮
+            draw_realtime_ui(
+                display,
+                mode_btn_rect,
+                connect_btn_rect,
+                record_btn_rect,
+                calibrate_btn_rect,
+                export_bvh_btn_rect
+            )
+            
+            # 绘制网球分析按钮
+            glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity()
+            glOrtho(0, display[0], 0, display[1], -1, 1)
+            glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity()
+            glDisable(GL_DEPTH_TEST)
 
-        # 绘制按钮背景 (淡黄色 #EEDD82)
-        tx = tennis_btn_rect.x
-        ty = display[1] - tennis_btn_rect.y - tennis_btn_rect.height
-        draw_rectangle(tx, ty, tennis_btn_rect.width, tennis_btn_rect.height, (0.93, 0.87, 0.51))
-        
-        # 绘制按钮边框 (黑色)
-        glColor3f(0, 0, 0); glLineWidth(1.0)
-        glBegin(GL_LINE_LOOP)
-        glVertex2f(tx, ty); glVertex2f(tx + tennis_btn_rect.width, ty)
-        glVertex2f(tx + tennis_btn_rect.width, ty + tennis_btn_rect.height); glVertex2f(tx, ty + tennis_btn_rect.height)
-        glEnd()
+            tx = tennis_btn_rect.x
+            ty = display[1] - tennis_btn_rect.y - tennis_btn_rect.height
+            draw_rectangle(tx, ty, tennis_btn_rect.width, tennis_btn_rect.height, (0.93, 0.87, 0.51))
+            
+            glColor3f(0, 0, 0); glLineWidth(1.0)
+            glBegin(GL_LINE_LOOP)
+            glVertex2f(tx, ty); glVertex2f(tx + tennis_btn_rect.width, ty)
+            glVertex2f(tx + tennis_btn_rect.width, ty + tennis_btn_rect.height); glVertex2f(tx, ty + tennis_btn_rect.height)
+            glEnd()
 
-        # 绘制按钮文字
-        t_label = "Tennis Analyze"
-        label_x = tx + (tennis_btn_rect.width - len(t_label)*7) / 2
-        label_y = ty + (tennis_btn_rect.height - 12) / 2 + 2
-        draw_text_2d(label_x, label_y, t_label, (0, 0, 0), 12)
+            t_label = "Tennis Analyze"
+            label_x = tx + (tennis_btn_rect.width - len(t_label)*7) / 2
+            label_y = ty + (tennis_btn_rect.height - 12) / 2 + 2
+            draw_text_2d(label_x, label_y, t_label, (0, 0, 0), 12)
 
-        # 恢复 3D 状态
-        glEnable(GL_DEPTH_TEST)
-        glMatrixMode(GL_PROJECTION); glPopMatrix()
-        glMatrixMode(GL_MODELVIEW); glPopMatrix()
-        # ======================== 网球分析按钮绘制结束 ========================
+            glEnable(GL_DEPTH_TEST)
+            glMatrixMode(GL_PROJECTION); glPopMatrix()
+            glMatrixMode(GL_MODELVIEW); glPopMatrix()
+        # ======================== UI绘制结束 ========================
         
-        # Draw Position and Velocity Panels
-        if all_joint_positions and all_joint_velocities and frames > 0:
-            if 0 <= current_frame < len(all_joint_positions) and 0 <= current_frame < len(all_joint_velocities):
-                current_positions = all_joint_positions[current_frame]
-                current_velocities = all_joint_velocities[current_frame]
-                draw_position_panel(display, current_positions, joints)
-                draw_velocity_panel(display, current_velocities, joints)
+        # Draw Position and Velocity Panels (based on toggle state)
+        # Offline mode: use pre-calculated data
+        if AppState.mode == AppMode.OFFLINE:
+            if all_joint_positions and all_joint_velocities and frames > 0:
+                if 0 <= current_frame < len(all_joint_positions) and 0 <= current_frame < len(all_joint_velocities):
+                    current_positions = all_joint_positions[current_frame]
+                    current_velocities = all_joint_velocities[current_frame]
+                    if show_position_panel:
+                        draw_position_panel(display, current_positions, joints)
+                    if show_velocity_panel:
+                        draw_velocity_panel(display, current_velocities, joints)
+        
+        # Realtime mode (Mocap/Secap): calculate positions from current joint matrices
+        elif AppState.mode in [AppMode.MOCAP, AppMode.SECAP] and joints:
+            import time
+            current_time = time.time()
+            
+            # Calculate current positions from joint matrices
+            realtime_positions = {}
+            realtime_velocities = {}
+            
+            for joint_name, joint in joints.items():
+                if hasattr(joint, 'matrix') and joint.matrix is not None:
+                    realtime_positions[joint_name] = joint.matrix[:3, 3]
+            
+            # Calculate velocities based on position change
+            if realtime_prev_positions and realtime_prev_time is not None:
+                dt = current_time - realtime_prev_time
+                if dt > 0:  # Avoid division by zero
+                    for joint_name in realtime_positions:
+                        if joint_name in realtime_prev_positions:
+                            pos_diff = realtime_positions[joint_name] - realtime_prev_positions[joint_name]
+                            realtime_velocities[joint_name] = pos_diff / dt
+                        else:
+                            realtime_velocities[joint_name] = np.array([0.0, 0.0, 0.0])
+                else:
+                    # Time interval too small, use zero velocity
+                    for joint_name in realtime_positions:
+                        realtime_velocities[joint_name] = np.array([0.0, 0.0, 0.0])
+            else:
+                # First frame or no previous data, initialize with zero
+                for joint_name in realtime_positions:
+                    realtime_velocities[joint_name] = np.array([0.0, 0.0, 0.0])
+            
+            # Update previous positions and time for next frame
+            realtime_prev_positions = realtime_positions.copy()
+            realtime_prev_time = current_time
+            
+            if realtime_positions:
+                if show_position_panel:
+                    draw_position_panel(display, realtime_positions, joints)
+                if show_velocity_panel:
+                    draw_velocity_panel(display, realtime_velocities, joints)
+        
+        # ======================== Toast 通知渲染 ========================
+        if toast_manager and APPLE_UI_AVAILABLE:
+            # Calculate delta time (use clock tick later)
+            delta_time = clock.get_time() / 1000.0  # Convert ms to seconds
+            toast_manager.update(delta_time)
+            if toast_manager.get_toasts():
+                setup_2d_rendering(display[0], display[1])
+                draw_toast_manager(toast_manager, display)
+                cleanup_2d_rendering()
+        
+        # ======================== 模式下拉菜单渲染 ========================
+        if mode_dropdown and APPLE_UI_AVAILABLE:
+            mode_dropdown.update(delta_time if 'delta_time' in dir() else 0.016)
+            # Sync dropdown selection with current mode
+            current_mode_id = AppState.mode.lower() if hasattr(AppState.mode, 'lower') else str(AppState.mode).split('.')[-1].lower()
+            if mode_dropdown.selected_id != current_mode_id:
+                mode_dropdown.selected_id = current_mode_id
+            
+            # Position dropdown at mode button location (y is button position, menu appears below)
+            mode_btn = apple_button_manager.get_button("mode") if apple_button_manager else None
+            if mode_btn:
+                mode_dropdown.x = mode_btn.x
+                mode_dropdown.y = mode_btn.y  # Same as button, options appear below
+                mode_dropdown.width = mode_btn.width + 40
+                mode_dropdown.height = mode_btn.height
+            
+            # Render the dropdown menu
+            setup_2d_rendering(display[0], display[1])
+            draw_dropdown_menu(mode_dropdown, display, overlay_manager)
+            cleanup_2d_rendering()
         
         overlay_manager.render()
         pygame.display.flip()
