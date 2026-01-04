@@ -28,6 +28,9 @@ dist/
 *.exe
 *.dll
 
+# PyInstaller spec 文件保留（用于打包）
+!build_bvh_viewer.spec
+
 # ============ IDE配置文件 ============
 .vscode/
 .idea/
