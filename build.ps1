@@ -7,7 +7,7 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
 # 1. 检查 Python 环境
-Write-Host "[1/6] 检查 Python 环境..." -ForegroundColor Yellow
+Write-Host "[1/7] 检查 Python 环境..." -ForegroundColor Yellow
 $pythonVersion = python --version 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "错误: 未找到 Python。请确保 Python 3.8+ 已安装并添加到 PATH。" -ForegroundColor Red
@@ -17,7 +17,7 @@ Write-Host "✓ Python 环境: $pythonVersion" -ForegroundColor Green
 Write-Host ""
 
 # 2. 检查并安装依赖
-Write-Host "[2/6] 检查依赖库..." -ForegroundColor Yellow
+Write-Host "[2/7] 检查依赖库..." -ForegroundColor Yellow
 $requirements = @(
     "pygame>=2.5.2",
     "PyOpenGL==3.1.7",
@@ -34,8 +34,48 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "✓ 依赖检查完成" -ForegroundColor Green
 Write-Host ""
 
-# 3. 清理之前的构建
-Write-Host "[3/6] 清理旧的构建文件..." -ForegroundColor Yellow
+# 3. 检查 MocapApi.dll
+Write-Host "[3/7] 检查 MocapApi.dll..." -ForegroundColor Yellow
+$localDll = "lib\MocapApi.dll"
+if (-not (Test-Path $localDll)) {
+    $sdkCandidates = @()
+    if ($env:NOITOM_MOCAP_SDK) {
+        $sdkCandidates += (Join-Path $env:NOITOM_MOCAP_SDK "lib\windows\x64\MocapApi.dll")
+    }
+    $sdkCandidates += @(
+        "..\NoitomMocapSDK\lib\windows\x64\MocapApi.dll",
+        "..\..\NoitomMocapSDK\lib\windows\x64\MocapApi.dll",
+        "C:\Noitom\NoitomMocapSDK\lib\windows\x64\MocapApi.dll"
+    )
+
+    $sourceDll = $null
+    foreach ($candidate in $sdkCandidates) {
+        if (Test-Path $candidate) {
+            $sourceDll = $candidate
+            break
+        }
+    }
+
+    if ($sourceDll) {
+        if (-not (Test-Path "lib")) {
+            New-Item -ItemType Directory -Path "lib" | Out-Null
+        }
+        Copy-Item $sourceDll $localDll -Force
+        Write-Host "✓ 已复制 MocapApi.dll: $sourceDll" -ForegroundColor Green
+    } else {
+        Write-Host "错误: 未找到 MocapApi.dll。" -ForegroundColor Red
+        Write-Host "请安装或复制 NoitomMocapSDK，并设置环境变量:" -ForegroundColor Yellow
+        Write-Host '  setx NOITOM_MOCAP_SDK "C:\path\to\NoitomMocapSDK"' -ForegroundColor White
+        Write-Host "然后重新打开 PowerShell 再运行 build.ps1。" -ForegroundColor Yellow
+        exit 1
+    }
+} else {
+    Write-Host "✓ MocapApi.dll 已存在: $localDll" -ForegroundColor Green
+}
+Write-Host ""
+
+# 4. 清理之前的构建
+Write-Host "[4/7] 清理旧的构建文件..." -ForegroundColor Yellow
 if (Test-Path "build") {
     Remove-Item -Recurse -Force "build"
     Write-Host "✓ 已删除 build/ 目录" -ForegroundColor Green
@@ -46,8 +86,8 @@ if (Test-Path "dist") {
 }
 Write-Host ""
 
-# 4. 检查必要文件
-Write-Host "[4/6] 检查必要文件..." -ForegroundColor Yellow
+# 5. 检查必要文件
+Write-Host "[5/7] 检查必要文件..." -ForegroundColor Yellow
 $requiredFiles = @(
     "bvh_visualizer_improved.py",
     "build_bvh_viewer.spec",
@@ -74,8 +114,8 @@ if ($missingFiles.Count -gt 0) {
 Write-Host "✓ 所有必要文件存在" -ForegroundColor Green
 Write-Host ""
 
-# 5. 开始打包
-Write-Host "[5/6] 开始打包..." -ForegroundColor Yellow
+# 6. 开始打包
+Write-Host "[6/7] 开始打包..." -ForegroundColor Yellow
 Write-Host "这可能需要 3-5 分钟，请耐心等待..." -ForegroundColor Cyan
 Write-Host ""
 
@@ -93,8 +133,8 @@ Write-Host ""
 Write-Host "✓ 打包完成 (耗时: $([math]::Round($duration, 1)) 秒)" -ForegroundColor Green
 Write-Host ""
 
-# 6. 验证输出
-Write-Host "[6/6] 验证输出文件..." -ForegroundColor Yellow
+# 7. 验证输出
+Write-Host "[7/7] 验证输出文件..." -ForegroundColor Yellow
 if (Test-Path "dist\BVH_Viewer.exe") {
     $fileSize = (Get-Item "dist\BVH_Viewer.exe").Length / 1MB
     Write-Host "✓ 可执行文件已生成: dist\BVH_Viewer.exe" -ForegroundColor Green

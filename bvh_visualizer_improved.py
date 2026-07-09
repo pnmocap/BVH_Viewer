@@ -194,6 +194,10 @@ class UserPreferences:
         "last_directory": "",
         "recent_files": [],
         "ui_theme": "light",
+        "secap_transport": "udp",
+        "secap_udp_port": 7012,
+        "secap_tcp_ip": "127.0.0.1",
+        "secap_tcp_port": 7003,
     }
     
     _prefs = None
@@ -335,9 +339,50 @@ class AppState:
             return False
         if cls.axis_studio_connector is None:
             cls.axis_studio_connector = AxisStudioConnector()
+        cls.apply_secap_preferences()
         if cls.recording_manager is None and RECORDING_AVAILABLE:
             cls.recording_manager = RecordingManager()
         return True
+
+    @classmethod
+    def get_secap_preferences(cls):
+        """Get validated Secap network preferences."""
+        transport = str(UserPreferences.get("secap_transport", "udp")).lower()
+        if transport not in ("udp", "tcp"):
+            transport = "udp"
+
+        try:
+            udp_port = int(UserPreferences.get("secap_udp_port", 7012))
+        except (TypeError, ValueError):
+            udp_port = 7012
+
+        tcp_ip = str(UserPreferences.get("secap_tcp_ip", "127.0.0.1")).strip() or "127.0.0.1"
+
+        try:
+            tcp_port = int(UserPreferences.get("secap_tcp_port", 7003))
+        except (TypeError, ValueError):
+            tcp_port = 7003
+
+        return {
+            "transport": transport,
+            "udp_port": udp_port,
+            "tcp_ip": tcp_ip,
+            "tcp_port": tcp_port,
+        }
+
+    @classmethod
+    def apply_secap_preferences(cls):
+        """Apply saved Secap network preferences to the connector."""
+        if not cls.axis_studio_connector:
+            return
+
+        prefs = cls.get_secap_preferences()
+        cls.axis_studio_connector.configure(
+            udp_port=prefs["udp_port"],
+            transport=prefs["transport"],
+            tcp_ip=prefs["tcp_ip"],
+            tcp_port=prefs["tcp_port"],
+        )
     
     @classmethod
     def cleanup(cls):
@@ -1904,13 +1949,13 @@ def draw_realtime_ui(display, mode_btn_rect, connect_btn_rect, record_btn_rect, 
         # 显示 Secap 状态
         if AppState.axis_studio_connector:
             status_text = AppState.axis_studio_connector.get_connection_status_text()
-            port_info = f"UDP Port: {AppState.axis_studio_connector.udp_port}"
+            endpoint_info = f"Endpoint: {AppState.axis_studio_connector.get_endpoint_label()}"
             
             if AppState.axis_studio_connector.is_listening:
                 status_color = (0.0, 0.5, 0.0) if AppState.axis_studio_connector.is_receiving_data else (0.5, 0.5, 0.0)
                 draw_text_2d(10, status_y, f"Status: {status_text}", status_color, font_size=12)
                 status_y += 15
-                draw_text_2d(10, status_y, port_info, (0.0, 0.4, 0.8), font_size=12)
+                draw_text_2d(10, status_y, endpoint_info, (0.0, 0.4, 0.8), font_size=12)
                 status_y += 15
                 
                 if not AppState.axis_studio_connector.is_receiving_data:
@@ -1919,6 +1964,8 @@ def draw_realtime_ui(display, mode_btn_rect, connect_btn_rect, record_btn_rect, 
                     status_y += 15
             else:
                 draw_text_2d(10, status_y, "Status: Not Listening", (0.5, 0.0, 0.0), font_size=12)
+                status_y += 15
+                draw_text_2d(10, status_y, endpoint_info, (0.0, 0.4, 0.8), font_size=12)
                 status_y += 15
     
     # 显示录制状态（两种模式共用）
@@ -2046,6 +2093,13 @@ def _update_apple_button_states(button_manager):
         
         connect_btn.enabled = AppState.mode != AppMode.OFFLINE
         connect_btn.style = ButtonStyle.SUCCESS if is_connected else ButtonStyle.PRIMARY
+
+    # Secap network settings button
+    settings_btn = button_manager.get_button("secap_settings")
+    if settings_btn:
+        settings_btn.enabled = AppState.mode == AppMode.SECAP
+        settings_btn.style = ButtonStyle.PRIMARY if AppState.mode == AppMode.SECAP else ButtonStyle.SECONDARY
+        settings_btn.text = "Settings"
     
     # Calibrate button
     calibrate_btn = button_manager.get_button("calibrate")
@@ -2186,6 +2240,14 @@ def _draw_apple_status_bar(display, overlay_manager):
             overlay_manager.draw_text(12, status_y, f"Status: {status_text}", (0, 180, 90), size=12)
         else:
             overlay_manager.draw_text(12, status_y, f"Status: {status_text}", (200, 140, 0), size=12)
+        status_y += 16
+        overlay_manager.draw_text(
+            12,
+            status_y,
+            f"Endpoint: {AppState.axis_studio_connector.get_endpoint_label()}",
+            (0, 120, 255),
+            size=12
+        )
         status_y += 16
     
     # Recording status
@@ -2540,15 +2602,22 @@ def main():
             font_size=UIConfig.FONT_SIZE_BODY
         ))
         
+        apple_button_manager.add_button("secap_settings", AppleButton(
+            x=mode_x + 85 + btn_margin + 95 + btn_margin, y=btn_y_pos, width=85, height=btn_h,
+            text="Settings", style=ButtonStyle.SECONDARY,
+            corner_radius=UIConfig.CORNER_RADIUS_MEDIUM,
+            font_size=UIConfig.FONT_SIZE_BODY
+        ))
+
         apple_button_manager.add_button("calibrate", AppleButton(
-            x=mode_x + 85 + btn_margin + 95 + btn_margin, y=btn_y_pos, width=90, height=btn_h,
+            x=mode_x + 85 + btn_margin + 95 + btn_margin + 85 + btn_margin, y=btn_y_pos, width=90, height=btn_h,
             text="Calibrate", style=ButtonStyle.SECONDARY,
             corner_radius=UIConfig.CORNER_RADIUS_MEDIUM,
             font_size=UIConfig.FONT_SIZE_BODY
         ))
         
         # Right group: Recording
-        rec_x = mode_x + 85 + btn_margin + 95 + btn_margin + 90 + UIConfig.SPACING_LG
+        rec_x = mode_x + 85 + btn_margin + 95 + btn_margin + 85 + btn_margin + 90 + UIConfig.SPACING_LG
         
         apple_button_manager.add_button("record", AppleButton(
             x=rec_x, y=btn_y_pos, width=85, height=btn_h,
@@ -2659,6 +2728,108 @@ def main():
                 print(f"File parsing failed: {file_path}")
                 bvh_fps = 0.0
                 bvh_total_frames = 0
+
+    def open_secap_settings_dialog():
+        """Open Secap network settings dialog."""
+        if AppState.mode != AppMode.SECAP or not AppState.axis_studio_connector:
+            if toast_manager:
+                toast_manager.warning("请先切换到 Secap 模式")
+            print("[Secap] Settings are only available in Secap mode")
+            return
+
+        if AppState.axis_studio_connector.is_listening:
+            messagebox.showinfo(
+                "Secap Network Settings",
+                "Stop listening before changing Secap network settings."
+            )
+            return
+
+        prefs = AppState.get_secap_preferences()
+        settings_win = tk.Tk()
+        settings_win.title("Secap Network Settings")
+        settings_win.geometry("360x260")
+        settings_win.resizable(False, False)
+
+        transport_var = tk.StringVar(value=prefs["transport"])
+        udp_port_var = tk.StringVar(value=str(prefs["udp_port"]))
+        tcp_ip_var = tk.StringVar(value=prefs["tcp_ip"])
+        tcp_port_var = tk.StringVar(value=str(prefs["tcp_port"]))
+
+        container = tk.Frame(settings_win, padx=18, pady=16)
+        container.pack(fill="both", expand=True)
+
+        protocol_frame = tk.LabelFrame(container, text="Protocol", padx=10, pady=8)
+        protocol_frame.pack(fill="x")
+        tk.Radiobutton(protocol_frame, text="UDP", variable=transport_var, value="udp").pack(anchor="w")
+        tk.Radiobutton(protocol_frame, text="TCP", variable=transport_var, value="tcp").pack(anchor="w")
+
+        endpoint_frame = tk.LabelFrame(container, text="Endpoint", padx=10, pady=8)
+        endpoint_frame.pack(fill="x", pady=(12, 0))
+
+        tk.Label(endpoint_frame, text="UDP Port").grid(row=0, column=0, sticky="w", pady=3)
+        udp_entry = tk.Entry(endpoint_frame, textvariable=udp_port_var, width=16)
+        udp_entry.grid(row=0, column=1, sticky="w", pady=3, padx=(12, 0))
+
+        tk.Label(endpoint_frame, text="TCP IP").grid(row=1, column=0, sticky="w", pady=3)
+        tcp_ip_entry = tk.Entry(endpoint_frame, textvariable=tcp_ip_var, width=20)
+        tcp_ip_entry.grid(row=1, column=1, sticky="w", pady=3, padx=(12, 0))
+
+        tk.Label(endpoint_frame, text="TCP Port").grid(row=2, column=0, sticky="w", pady=3)
+        tcp_port_entry = tk.Entry(endpoint_frame, textvariable=tcp_port_var, width=16)
+        tcp_port_entry.grid(row=2, column=1, sticky="w", pady=3, padx=(12, 0))
+
+        def refresh_fields():
+            if transport_var.get() == "udp":
+                udp_entry.configure(state="normal")
+                tcp_ip_entry.configure(state="disabled")
+                tcp_port_entry.configure(state="disabled")
+            else:
+                udp_entry.configure(state="disabled")
+                tcp_ip_entry.configure(state="normal")
+                tcp_port_entry.configure(state="normal")
+
+        def validate_port(value, field_name):
+            try:
+                port = int(value)
+            except ValueError:
+                raise ValueError(f"{field_name} must be a number")
+            if port < 1 or port > 65535:
+                raise ValueError(f"{field_name} must be between 1 and 65535")
+            return port
+
+        def save_settings():
+            try:
+                udp_port = validate_port(udp_port_var.get(), "UDP Port")
+                tcp_port = validate_port(tcp_port_var.get(), "TCP Port")
+                tcp_ip = tcp_ip_var.get().strip()
+                if not tcp_ip:
+                    raise ValueError("TCP IP is required")
+            except ValueError as exc:
+                messagebox.showerror("Invalid Secap Settings", str(exc))
+                return
+
+            UserPreferences.set("secap_transport", transport_var.get())
+            UserPreferences.set("secap_udp_port", udp_port)
+            UserPreferences.set("secap_tcp_ip", tcp_ip)
+            UserPreferences.set("secap_tcp_port", tcp_port)
+            UserPreferences.save()
+
+            AppState.apply_secap_preferences()
+            endpoint = AppState.axis_studio_connector.get_endpoint_label()
+            if toast_manager:
+                toast_manager.success(f"Secap 设置已保存: {endpoint}")
+            print(f"[Secap] Network settings saved: {endpoint}")
+            settings_win.destroy()
+
+        transport_var.trace_add("write", lambda *_: refresh_fields())
+        refresh_fields()
+
+        buttons = tk.Frame(container)
+        buttons.pack(fill="x", pady=(14, 0))
+        tk.Button(buttons, text="Cancel", command=settings_win.destroy, width=10).pack(side="right")
+        tk.Button(buttons, text="Save", command=save_settings, width=10).pack(side="right", padx=(0, 8))
+
+        settings_win.mainloop()
     
     # ======================== 实时模式辅助函数 ========================
     def switch_to_mode(target_mode: str):
@@ -2781,7 +2952,7 @@ def main():
         切换连接状态
         
         Mocap 模式：Connect/Disconnect 设备
-        Secap 模式：Listen/Stop UDP 广播
+        Secap 模式：Listen/Stop Axis Studio BVH 广播
         """
         try:
             if AppState.mode == AppMode.OFFLINE:
@@ -2823,13 +2994,15 @@ def main():
                     return
                 
                 if not AppState.axis_studio_connector.is_listening:
-                    # 开始监听 UDP 广播
+                    # 开始接收 Axis Studio BVH 广播
                     try:
+                        AppState.apply_secap_preferences()
                         success, msg = AppState.axis_studio_connector.start_listening()
                         if success:
+                            endpoint = AppState.axis_studio_connector.get_endpoint_label()
                             if toast_manager:
-                                toast_manager.success(f"已开始监听 UDP 端口 {AppState.axis_studio_connector.udp_port}")
-                            print(f"[Secap] Listening on UDP port {AppState.axis_studio_connector.udp_port}")
+                                toast_manager.success(f"已开始接收 {endpoint}")
+                            print(f"[Secap] Listening on {endpoint}")
                             print("[Secap] Waiting for Axis Studio BVH broadcast...")
                         else:
                             if toast_manager:
@@ -3186,6 +3359,8 @@ def main():
                         toggle_mode()
                 elif apple_clicked_button == "connect":
                     toggle_connection()
+                elif apple_clicked_button == "secap_settings":
+                    open_secap_settings_dialog()
                 elif apple_clicked_button == "calibrate":
                     start_calibration()
                 elif apple_clicked_button == "record":

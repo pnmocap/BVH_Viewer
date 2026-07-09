@@ -1,10 +1,10 @@
 """
-Axis Studio BVH 数据连接器 (Secap 模式)
-通过 UDP 接收 Axis Studio 广播的实时 BVH 数据
+Axis Studio BVH data connector for Secap mode.
 
-与 MocapConnector (Mocap 模式) 完全解耦：
-- Mocap 模式：使用 MocapAPI 直接与动捕设备通信（TCP/UDP 双向）
-- Secap 模式：仅通过 UDP 单向接收 Axis Studio 的 BVH 广播
+This connector receives real-time BVH data broadcast by Axis Studio over UDP or TCP.
+It is intentionally separated from MocapConnector:
+- Mocap mode talks directly to motion capture devices through MocapAPI.
+- Secap mode only receives Axis Studio BVH broadcast data.
 """
 import threading
 import time
@@ -14,7 +14,7 @@ import numpy as np
 try:
     from mocap_api import (
         MCPApplication, MCPSettings, MCPAvatar, MCPJoint,
-        MCPBvhData, MCPBvhRotation, MCPEventType
+        MCPBvhData, MCPBvhRotation, MCPBvhDisplacement, MCPEventType
     )
     AXIS_STUDIO_API_AVAILABLE = True
 except ImportError as e:
@@ -25,7 +25,7 @@ except ImportError as e:
 class AxisStudioConnectionState:
     """Axis Studio 连接状态"""
     DISCONNECTED = 0      # 未连接（未监听 UDP）
-    LISTENING = 1         # 正在监听 UDP 广播
+    LISTENING = 1         # 正在监听/连接 Axis Studio 广播
     RECEIVING = 2         # 正在接收数据
     ERROR = -1            # 错误状态
 
@@ -35,7 +35,7 @@ class AxisStudioConnector:
     Axis Studio BVH 数据连接器
     
     功能：
-    1. 监听指定 UDP 端口，接收 Axis Studio 广播的 BVH 数据
+    1. 通过 UDP 或 TCP 接收 Axis Studio 广播的 BVH 数据
     2. 解析实时关节数据（位置 + 四元数旋转）
     3. 提供统一的数据接口供 Visualizer 渲染
     
@@ -55,7 +55,10 @@ class AxisStudioConnector:
         self.connection_state = AxisStudioConnectionState.DISCONNECTED
         
         # 网络配置
+        self.transport = "udp"  # "udp" or "tcp"
         self.udp_port = 7012  # Axis Studio 默认 BVH 广播端口
+        self.tcp_ip = "127.0.0.1"
+        self.tcp_port = 7003
         
         # 帧率统计
         self.frame_count = 0
@@ -66,14 +69,30 @@ class AxisStudioConnector:
         self.last_data_time = None
         self.data_timeout = 5.0  # 5秒无数据视为断开
     
-    def configure(self, udp_port: int = 7012):
+    def configure(
+        self,
+        udp_port: int = 7012,
+        transport: str = "udp",
+        tcp_ip: str = "127.0.0.1",
+        tcp_port: int = 7003
+    ):
         """
-        配置 UDP 监听端口
-        
-        参数:
-            udp_port: UDP 端口号（默认 7012，Axis Studio 标准端口）
+        Configure Axis Studio BVH broadcast connection parameters.
+
+        Args:
+            transport: Transport protocol, "udp" or "tcp".
+            udp_port: UDP port, default 7012.
+            tcp_ip: Axis Studio machine IP for TCP mode.
+            tcp_port: Axis Studio BVH broadcast port for TCP mode.
         """
+        transport = transport.lower()
+        if transport not in ("udp", "tcp"):
+            raise ValueError("transport must be 'udp' or 'tcp'")
+
+        self.transport = transport
         self.udp_port = udp_port
+        self.tcp_ip = tcp_ip
+        self.tcp_port = tcp_port
     
     def start_listening(self) -> tuple:
         """
@@ -95,9 +114,12 @@ class AxisStudioConnector:
             # 配置 BVH 数据格式（与 Axis Studio 保持一致）
             self.settings.set_bvh_data(MCPBvhData.Binary)
             self.settings.set_bvh_rotation(MCPBvhRotation.YXZ)  # 通常为 YXZ 或 XYZ
+            self.settings.set_bvh_transformation(MCPBvhDisplacement.Enable)
             
-            # 设置 UDP 监听端口（关键：只接收，不发送）
-            self.settings.set_udp(self.udp_port)
+            if self.transport == "tcp":
+                self.settings.set_tcp(self.tcp_ip, self.tcp_port)
+            else:
+                self.settings.set_udp(self.udp_port)
             
             self.app.set_settings(self.settings)
             success, msg = self.app.open()
@@ -105,9 +127,9 @@ class AxisStudioConnector:
             if success:
                 self.is_listening = True
                 self.last_data_time = time.time()
-                print(f"[AxisStudioConnector] Listening on UDP port {self.udp_port}")
+                print(f"[AxisStudioConnector] Listening on {self.get_endpoint_label()}")
                 print(f"[AxisStudioConnector] Waiting for Axis Studio BVH broadcast...")
-                return True, f"Listening on UDP:{self.udp_port}"
+                return True, f"Listening on {self.get_endpoint_label()}"
             else:
                 self.connection_state = AxisStudioConnectionState.ERROR
                 return False, f"Failed to listen: {msg}"
@@ -127,6 +149,12 @@ class AxisStudioConnector:
             print("[AxisStudioConnector] Stopped listening")
         except Exception as e:
             print(f"[AxisStudioConnector] Stop listening error: {e}")
+
+    def get_endpoint_label(self) -> str:
+        """Return the current Secap endpoint label."""
+        if self.transport == "tcp":
+            return f"TCP:{self.tcp_ip}:{self.tcp_port}"
+        return f"UDP:{self.udp_port}"
     
     def poll_and_update(self) -> Optional[Dict]:
         """
@@ -268,7 +296,11 @@ class AxisStudioConnector:
             'listening': self.is_listening,
             'receiving': self.is_receiving_data,
             'fps': self.current_fps,
+            'transport': self.transport,
             'port': self.udp_port,
+            'tcp_ip': self.tcp_ip,
+            'tcp_port': self.tcp_port,
+            'endpoint': self.get_endpoint_label(),
             'last_data_age': time.time() - self.last_data_time if self.last_data_time else None
         }
 
@@ -290,7 +322,7 @@ def test_axis_studio_receiver():
     print("Please ensure:")
     print("1. Axis Studio is running")
     print("2. BVH broadcast is enabled (Settings -> BVH Data Broadcast)")
-    print("3. UDP port is set to 7012")
+    print("3. UDP port is set to 7012, or configure TCP endpoint before listening")
     print("=" * 60)
     
     connector = AxisStudioConnector()
@@ -326,5 +358,3 @@ def test_axis_studio_receiver():
 
 if __name__ == '__main__':
     test_axis_studio_receiver()
-
-

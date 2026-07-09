@@ -11,6 +11,7 @@ Output: dist/BVH_Viewer.exe
 """
 
 import sys
+import os
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 block_cipher = None
@@ -41,6 +42,9 @@ hidden_imports = [
     'matplotlib',
     'matplotlib.pyplot',
     'matplotlib.backends.backend_agg',
+    'tkinter',
+    'tkinter.filedialog',
+    'tkinter.messagebox',
     
     # Standard library modules that might be missed
     'json',
@@ -66,8 +70,10 @@ datas = [
     ('ui', 'ui'),
 ]
 
-# Binaries - PyInstaller will automatically find most DLLs
+# Binaries
 binaries = []
+if os.path.exists('lib/MocapApi.dll'):
+    binaries.append(('lib/MocapApi.dll', 'lib'))
 
 a = Analysis(
     ['bvh_visualizer_improved.py'],
@@ -80,7 +86,6 @@ a = Analysis(
     runtime_hooks=[],
     excludes=[
         # Exclude unnecessary modules to reduce size
-        'tkinter',
         'test',
         'unittest',
         'pydoc',

@@ -89,8 +89,9 @@ A comprehensive 3D motion capture data visualization tool supporting offline BVH
 ### Network Requirements (for Real-time Modes)
 - **Mocap Mode**: Local network connection to Noitom motion capture device
   - Default configuration: 10.42.0.101:8002 (local) ↔ 10.42.0.202:8080 (device)
-- **Secap Mode**: UDP port 7012 open for receiving Axis Studio broadcast
-  - Can operate on same computer (127.0.0.1) or across LAN
+- **Secap Mode**: UDP port 7012 or TCP endpoint open for receiving Axis Studio broadcast
+  - UDP can operate on same computer (127.0.0.1) or across LAN
+  - TCP connects from BVH Viewer to the Axis Studio machine and port
 
 ## 🚀 Quick Start
 
@@ -120,11 +121,12 @@ A comprehensive 3D motion capture data visualization tool supporting offline BVH
      6. Click "Record" to start capturing
    
    - **For Axis Studio Integration**:
-     1. Start Axis Studio and enable BVH broadcast (UDP port 7012)
+     1. Start Axis Studio and enable BVH broadcast (UDP port 7012, or TCP endpoint)
      2. Click **Mode** button and select **Secap** (or press `Ctrl+3`)
      3. Blue toast notification confirms mode switch
-     4. Click "Listen" to start receiving data
-     5. Click "Record" when ready to capture
+     4. Click "Settings" if you need TCP or a custom port
+     5. Click "Listen" to start receiving data
+     6. Click "Record" when ready to capture
 
 ### For Developers (Source Code)
 
@@ -375,23 +377,23 @@ class MocapConnector:
 - **LAN connection**: Use actual IP addresses (check with `ipconfig`)
 - **Different subnets**: Ensure routing is configured correctly
 
-### Secap Mode UDP Configuration
+### Secap Mode Network Configuration
 
-Edit UDP port in `axis_studio_connector.py` (line 58):
+Use the **Settings** button in Secap mode to choose UDP or TCP. The values are saved in the user preference file.
 
-```python
-class AxisStudioConnector:
-    def __init__(self):
-        self.udp_port = 7012  # Axis Studio BVH broadcast port
-```
-
-**Axis Studio Settings:**
+**UDP Settings:**
 1. Open Axis Studio → Settings → BVH Data Broadcast
-2. Enable "UDP Broadcast"
-3. Set port to `7012` (must match BVH Viewer setting)
+2. Select UDP
+3. Set destination port to `7012` (or the UDP port shown in BVH Viewer)
 4. Set target IP:
    - Same computer: `127.0.0.1`
    - Different computer: BVH Viewer machine's IP address
+
+**TCP Settings:**
+1. Open Axis Studio → Settings → BVH Data Broadcast
+2. Select TCP
+3. Set the Axis Studio local address and port, for example `192.168.1.155:7003`
+4. In BVH Viewer → Secap → Settings, choose TCP and enter the same IP and port
 
 ### User Preferences Configuration
 
@@ -495,13 +497,15 @@ class UIConfig:
 1. **Axis Studio Setup** (2 minutes)
    - Open Axis Studio software
    - Connect and calibrate motion capture suit
-   - Settings → BVH Data Broadcast → Enable UDP
-   - Set port to `7012`, target IP to robot controller's IP
+   - Settings → BVH Data Broadcast → Enable UDP or TCP
+   - For UDP, set port to `7012` and target IP to the robot controller's IP
+   - For TCP, note the Axis Studio local IP and port
 
 2. **BVH Viewer Setup** (30 seconds)
    - Launch BVH Viewer
    - Press `M` three times to Secap mode (blue indicator)
-   - Press `C` to start listening on UDP port 7012
+   - Use Settings if you need TCP or a custom UDP port
+   - Press `C` to start receiving data
 
 3. **Verify Connection** (immediate)
    - Status changes to "Receiving (60 FPS)"
@@ -678,8 +682,9 @@ class UIConfig:
 |--------|--------------|----------|
 | **Connect** | Mocap mode | Establish connection to motion capture device |
 | **Disconnect** | Mocap mode | Close device connection |
-| **Listen** | Secap mode | Start listening for UDP broadcast |
+| **Listen** | Secap mode | Start receiving Axis Studio BVH broadcast |
 | **Stop** | Secap mode | Stop listening |
+| **Settings** | Secap mode | Configure Secap UDP/TCP endpoint |
 
 #### Recording Panel
 | Button | Color When Active | Function |
@@ -723,7 +728,7 @@ class UIConfig:
 
 #### Secap Mode  
 - **Listening Status**: Not Listening / Waiting for Data / Receiving
-- **UDP Port**: Port number being monitored (default: 7012)
+- **Endpoint**: Current UDP port or TCP IP:port
 - **Receive FPS**: Incoming data frame rate
 - **Warning**: "⚠️ Please start BVH broadcast in Axis Studio" (if no data)
 
@@ -829,25 +834,30 @@ netstat -an | findstr :8080
 
 1. **Verify Axis Studio Broadcast**:
    - Axis Studio → Settings → BVH Data Broadcast
-   - Check "Enable UDP Broadcast" is ticked
-   - Port shows `7012`
-   - Target IP matches BVH Viewer computer
+   - Check BVH broadcast is enabled
+   - For UDP, port shows `7012` or the BVH Viewer UDP port
+   - For UDP, target IP matches BVH Viewer computer
+   - For TCP, BVH Viewer Settings uses the Axis Studio local IP and port
 
 2. **Check Network Configuration**:
    ```powershell
-   # Same computer (most common):
+   # UDP same computer (most common):
    Target IP in Axis Studio: 127.0.0.1
    
-   # Different computers:
+   # UDP different computers:
    # On BVH Viewer computer, run:
    ipconfig
    # Note IPv4 Address (e.g., 192.168.1.50)
    # Set this as Target IP in Axis Studio
+
+   # TCP:
+   # Use Axis Studio's local IP and port in BVH Viewer Secap Settings
    ```
 
 3. **Firewall Rules**:
    - Windows Firewall → Advanced Settings → Inbound Rules
-   - Create new rule: Allow UDP port 7012
+   - UDP: allow UDP port 7012 or your configured UDP port
+   - TCP: allow the configured Axis Studio TCP port
    - Apply to both Private and Public networks
 
 4. **Test UDP Reception**:
@@ -996,7 +1006,7 @@ Device → MocapConnector.poll_and_update() → Frame data → update_realtime_j
                                               └→ RecordingManager → BVH export
 
 Secap Mode:  
-Axis Studio → UDP:7012 → AxisStudioConnector.poll_and_update() → Frame data → Rendering
+Axis Studio → UDP:7012 or TCP:ip:port → AxisStudioConnector.poll_and_update() → Frame data → Rendering
                                                                    └→ RecordingManager
 ```
 
