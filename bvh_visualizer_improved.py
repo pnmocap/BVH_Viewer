@@ -2747,7 +2747,6 @@ def main():
         prefs = AppState.get_secap_preferences()
         settings_win = tk.Tk()
         settings_win.title("Secap Network Settings")
-        settings_win.geometry("360x260")
         settings_win.resizable(False, False)
 
         transport_var = tk.StringVar(value=prefs["transport"])
@@ -2829,6 +2828,15 @@ def main():
         tk.Button(buttons, text="Cancel", command=settings_win.destroy, width=10).pack(side="right")
         tk.Button(buttons, text="Save", command=save_settings, width=10).pack(side="right", padx=(0, 8))
 
+        settings_win.update_idletasks()
+        width = max(420, settings_win.winfo_reqwidth())
+        height = max(340, settings_win.winfo_reqheight())
+        screen_width = settings_win.winfo_screenwidth()
+        screen_height = settings_win.winfo_screenheight()
+        x = max(0, (screen_width - width) // 2)
+        y = max(0, (screen_height - height) // 2)
+        settings_win.geometry(f"{width}x{height}+{x}+{y}")
+        settings_win.minsize(width, height)
         settings_win.mainloop()
     
     # ======================== 实时模式辅助函数 ========================
