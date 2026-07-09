@@ -1272,7 +1272,7 @@ class MCPApplication(object):
     for i in range(evt_count.value):
       evt_array[i].size = sizeof(MCPEvent)
     err = self.api.contents.PollApplicationNextEvent(evt_array, pointer(evt_count), self._handle)
-    if err != MCPError.NoError:
+    if err not in (MCPError.NoError, MCPError.MoreEvent):
       return []
     if evt_count.value == 0:
       return []
